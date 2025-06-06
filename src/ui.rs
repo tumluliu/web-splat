@@ -1,8 +1,8 @@
-#[cfg(target_arch = "wasm32")]
-use web_time::Duration;
 use std::ops::RangeInclusive;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
+#[cfg(target_arch = "wasm32")]
+use web_time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::renderer::DEFAULT_KERNEL_SIZE;
@@ -12,10 +12,9 @@ use cgmath::{Euler, Matrix3, Quaternion};
 use egui::Vec2b;
 
 #[cfg(target_arch = "wasm32")]
-use egui::{Align2,Vec2};
+use egui::{Align2, Vec2};
 
 use egui::{emath::Numeric, Color32, RichText};
-
 
 #[cfg(not(target_arch = "wasm32"))]
 use egui_plot::{Legend, PlotPoints};
@@ -80,13 +79,11 @@ pub(crate) fn ui(state: &mut WindowContext) -> bool {
                         .position(egui_plot::Corner::LeftBottom),
                 )
                 .show(ui, |ui| {
-                    let line =
-                        egui_plot::Line::new("preprocess",PlotPoints::from_ys_f32(&pre));
+                    let line = egui_plot::Line::new("preprocess", PlotPoints::from_ys_f32(&pre));
                     ui.line(line);
-                    let line = egui_plot::Line::new("sorting",PlotPoints::from_ys_f32(&sort));
+                    let line = egui_plot::Line::new("sorting", PlotPoints::from_ys_f32(&sort));
                     ui.line(line);
-                    let line =
-                        egui_plot::Line::new("rasterize",PlotPoints::from_ys_f32(&rast));
+                    let line = egui_plot::Line::new("rasterize", PlotPoints::from_ys_f32(&rast));
                     ui.line(line);
                 });
         });
@@ -116,10 +113,10 @@ pub(crate) fn ui(state: &mut WindowContext) -> bool {
                 let enable_bg = !state.splatting_args.show_env_map && !state.display.has_env_map();
                 ui.add_enabled(enable_bg, egui::Label::new("Background Color"));
                 let mut color = egui::Color32::from_rgba_premultiplied(
-                    (state.splatting_args.background_color.r*255.) as u8,
-                    (state.splatting_args.background_color.g*255.) as u8,
-                    (state.splatting_args.background_color.b*255.) as u8,
-                    (state.splatting_args.background_color.a*255.) as u8,
+                    (state.splatting_args.background_color.r * 255.) as u8,
+                    (state.splatting_args.background_color.g * 255.) as u8,
+                    (state.splatting_args.background_color.b * 255.) as u8,
+                    (state.splatting_args.background_color.a * 255.) as u8,
                 );
                 ui.add_enabled_ui(enable_bg, |ui| {
                     egui::color_picker::color_edit_button_srgba(
@@ -162,6 +159,237 @@ pub(crate) fn ui(state: &mut WindowContext) -> bool {
                 }
             });
     });
+
+    // Debug Information Window
+    egui::Window::new("🐛 Debug Info")
+        .default_width(300.)
+        .default_height(400.)
+        .resizable(true)
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                let camera = &state.splatting_args.camera;
+                let camera_pos = camera.position;
+                let camera_rot = camera.rotation;
+                let projection = &camera.projection;
+
+                // Convert quaternion to Euler angles for display
+                let euler: Euler<cgmath::Rad<f32>> = Euler::from(camera_rot);
+                let euler_degrees = Euler::new(
+                    cgmath::Deg::from(euler.x),
+                    cgmath::Deg::from(euler.y),
+                    cgmath::Deg::from(euler.z),
+                );
+
+                ui.heading("Camera Information");
+                egui::Grid::new("camera_debug")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("Position X:");
+                        ui.label(format!("{:.3}", camera_pos.x));
+                        ui.end_row();
+
+                        ui.strong("Position Y:");
+                        ui.label(format!("{:.3}", camera_pos.y));
+                        ui.end_row();
+
+                        ui.strong("Position Z:");
+                        ui.label(format!("{:.3}", camera_pos.z));
+                        ui.end_row();
+
+                        ui.strong("Rotation X (deg):");
+                        ui.label(format!("{:.1}°", euler_degrees.x.0));
+                        ui.end_row();
+
+                        ui.strong("Rotation Y (deg):");
+                        ui.label(format!("{:.1}°", euler_degrees.y.0));
+                        ui.end_row();
+
+                        ui.strong("Rotation Z (deg):");
+                        ui.label(format!("{:.1}°", euler_degrees.z.0));
+                        ui.end_row();
+
+                        ui.strong("FOV X (deg):");
+                        ui.label(format!("{:.1}°", cgmath::Deg::from(projection.fovx).0));
+                        ui.end_row();
+
+                        ui.strong("FOV Y (deg):");
+                        ui.label(format!("{:.1}°", cgmath::Deg::from(projection.fovy).0));
+                        ui.end_row();
+
+                        ui.strong("Near Plane:");
+                        ui.label(format!("{:.3}", projection.znear));
+                        ui.end_row();
+
+                        ui.strong("Far Plane:");
+                        ui.label(format!("{:.1}", projection.zfar));
+                        ui.end_row();
+                    });
+
+                ui.separator();
+
+                // View center (controller center)
+                ui.heading("View Information");
+                egui::Grid::new("view_debug")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        let center = state.controller.center;
+                        ui.strong("View Center X:");
+                        ui.label(format!("{:.3}", center.x));
+                        ui.end_row();
+
+                        ui.strong("View Center Y:");
+                        ui.label(format!("{:.3}", center.y));
+                        ui.end_row();
+
+                        ui.strong("View Center Z:");
+                        ui.label(format!("{:.3}", center.z));
+                        ui.end_row();
+
+                        ui.strong("Viewport Width:");
+                        ui.label(format!("{}", state.splatting_args.viewport.x));
+                        ui.end_row();
+
+                        ui.strong("Viewport Height:");
+                        ui.label(format!("{}", state.splatting_args.viewport.y));
+                        ui.end_row();
+                    });
+
+                ui.separator();
+
+                // Performance Information
+                ui.heading("Performance");
+                egui::Grid::new("performance_debug")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("FPS:");
+                        ui.label(format!("{:.1}", state.fps));
+                        ui.end_row();
+
+                        ui.strong("Frame Time (ms):");
+                        ui.label(format!("{:.1}", 1000.0 / state.fps.max(0.1)));
+                        ui.end_row();
+
+                        ui.strong("Walltime (s):");
+                        ui.label(format!(
+                            "{:.1}",
+                            state.splatting_args.walltime.as_secs_f32()
+                        ));
+                        ui.end_row();
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            ui.strong("Visible Gaussians:");
+                            ui.label(format_thousands(num_drawn));
+                            ui.end_row();
+
+                            ui.strong("Visible %:");
+                            ui.label(format!(
+                                "{:.1}%",
+                                (num_drawn as f32 / state.pc.num_points() as f32) * 100.
+                            ));
+                            ui.end_row();
+                        }
+                    });
+
+                ui.separator();
+
+                // Scene Information
+                ui.heading("Scene");
+                egui::Grid::new("scene_debug")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("Total Gaussians:");
+                        ui.label(format_thousands(state.pc.num_points()));
+                        ui.end_row();
+
+                        ui.strong("SH Degree:");
+                        ui.label(state.pc.sh_deg().to_string());
+                        ui.end_row();
+
+                        ui.strong("Max SH Degree:");
+                        ui.label(state.splatting_args.max_sh_deg.to_string());
+                        ui.end_row();
+
+                        ui.strong("Gaussian Scaling:");
+                        ui.label(format!("{:.3}", state.splatting_args.gaussian_scaling));
+                        ui.end_row();
+
+                        let bbox = state.pc.bbox();
+                        ui.strong("Scene Center:");
+                        ui.label(format!(
+                            "({:.2}, {:.2}, {:.2})",
+                            bbox.center().x,
+                            bbox.center().y,
+                            bbox.center().z
+                        ));
+                        ui.end_row();
+
+                        ui.strong("Scene Radius:");
+                        ui.label(format!("{:.2}", bbox.radius()));
+                        ui.end_row();
+
+                        if let Some(scene) = &state.scene {
+                            ui.strong("Dataset Cameras:");
+                            ui.label(scene.num_cameras().to_string());
+                            ui.end_row();
+
+                            ui.strong("Scene Extend:");
+                            ui.label(format!("{:.2}", scene.extend()));
+                            ui.end_row();
+                        }
+
+                        if let Some(current_view) = state.current_view {
+                            ui.strong("Current View ID:");
+                            ui.label(current_view.to_string());
+                            ui.end_row();
+                        }
+                    });
+
+                ui.separator();
+
+                // Rendering Information
+                ui.heading("Rendering");
+                egui::Grid::new("rendering_debug")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("Resolution:");
+                        ui.label(format!(
+                            "{}x{}",
+                            state.splatting_args.resolution.x, state.splatting_args.resolution.y
+                        ));
+                        ui.end_row();
+
+                        ui.strong("Scale Factor:");
+                        ui.label(format!("{:.2}", state.scale_factor));
+                        ui.end_row();
+
+                        ui.strong("Show Env Map:");
+                        ui.label(state.splatting_args.show_env_map.to_string());
+                        ui.end_row();
+
+                        ui.strong("Compressed:");
+                        ui.label(state.pc.compressed().to_string());
+                        ui.end_row();
+
+                        if let Some(mip_splatting) = state.splatting_args.mip_splatting {
+                            ui.strong("Mip Splatting:");
+                            ui.label(mip_splatting.to_string());
+                            ui.end_row();
+                        }
+
+                        if let Some(kernel_size) = state.splatting_args.kernel_size {
+                            ui.strong("Kernel Size:");
+                            ui.label(format!("{:.2}", kernel_size));
+                            ui.end_row();
+                        }
+                    });
+            });
+        });
 
     let mut new_camera: Option<SetCamera> = None;
     #[allow(unused_mut)]
