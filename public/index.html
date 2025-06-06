@@ -135,13 +135,20 @@
 
         async function checkWebGPU() {
             if (!navigator.gpu) {
+                console.log("navigator.gpu not available");
                 return false;
             }
             try {
                 let adapter = await navigator.gpu.requestAdapter()
+                if (!adapter) {
+                    console.log("Failed to get WebGPU adapter");
+                    return false;
+                }
                 let device = await adapter.requestDevice();
+                console.log("WebGPU is available!");
                 return true
             } catch (e) {
+                console.error("WebGPU error:", e);
                 return false;
             }
         }
@@ -213,7 +220,7 @@
 
                 let [pc_data, scene_data] = await Promise.all([pc_promise, scene_promise]);
                 await init_promise;
-                run_wasm(pc_data, scene_data,pc_file,scene_file);
+                run_wasm(pc_data, scene_data, pc_file, scene_file);
             } catch (e) {
                 document.getElementById("spinner").style.display = "none";
                 let errorPane = document.getElementById("loading-error");
