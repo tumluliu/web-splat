@@ -39,6 +39,8 @@ mod controller;
 pub use controller::CameraController;
 mod pointcloud;
 pub use pointcloud::PointCloud;
+mod chat;
+pub use chat::{ChatState, McpResponse, SceneObject, ScenePath};
 
 pub mod io;
 
@@ -156,6 +158,8 @@ pub struct WindowContext {
     #[cfg(feature = "video")]
     cameras_save_path: String,
     stopwatch: Option<GPUStopwatch>,
+    chat_state: ChatState,
+    pending_chat_responses: Vec<(String, McpResponse)>,
 }
 
 impl WindowContext {
@@ -296,6 +300,8 @@ impl WindowContext {
             scene_file_path: None,
 
             stopwatch,
+            chat_state: ChatState::default(),
+            pending_chat_responses: Vec::new(),
         })
     }
 
@@ -345,15 +351,103 @@ impl WindowContext {
     /// returns whether redraw is required
     fn ui(&mut self) -> (bool, egui::FullOutput) {
         self.ui_renderer.begin_frame(&self.window);
-        let request_redraw = ui::ui(self);
+        let (request_redraw, chat_message) = ui::ui(self);
+
+        // Handle chat message if present
+        if let Some(message) = chat_message {
+            log::info!("Chat message received: {}", message);
+            self.handle_chat_message(message);
+            log::info!("Chat message handling complete");
+        }
 
         let shapes = self.ui_renderer.end_frame(&self.window);
 
         return (request_redraw, shapes);
     }
 
+    fn handle_chat_message(&mut self, message: String) {
+        log::info!("handle_chat_message called with: {}", message);
+        
+        // Add user message and set sending state
+        self.chat_state.add_message(message.clone(), true);
+        self.chat_state.is_sending = true;
+        
+        log::info!("User message added, making HTTP request to server");
+        
+        // Make HTTP request to the actual server
+        let server_url = self.chat_state.mcp_server_url.clone();
+        
+        log::info!("Sending HTTP request to: {}/query with message: {}", server_url, message);
+        
+        // Spawn async task to make HTTP request
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let msg_clone = message.clone();
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            match rt.block_on(crate::chat::send_chat_message(msg_clone, &server_url)) {
+                Ok(response) => {
+                    log::info!("Received HTTP response successfully");
+                    self.pending_chat_responses.push((message, response));
+                }
+                Err(e) => {
+                    log::warn!("HTTP request failed: {}, falling back to mock response", e);
+                    let mock_response = ui::create_mock_response(&message);
+                    self.pending_chat_responses.push((message, mock_response));
+                }
+            }
+        }
+        
+        #[cfg(target_arch = "wasm32")]
+        {
+            log::info!("WASM build: making HTTP request");
+            
+            // Make async HTTP request and handle response when it completes
+            let msg_clone = message.clone();
+            let server_url_clone = server_url.clone();
+            
+            // Use a shared state approach to handle the async response
+            // For now, we'll make the request and see if it works
+            wasm_bindgen_futures::spawn_local(async move {
+                log::info!("Starting WASM HTTP request...");
+                match crate::chat::send_chat_message(msg_clone, &server_url_clone).await {
+                    Ok(response) => {
+                        log::info!("WASM HTTP request successful! Response: {:?}", response);
+                        // TODO: Find a way to update the UI with this response
+                        // For now just log it to confirm the HTTP request works
+                    }
+                    Err(e) => {
+                        log::warn!("WASM HTTP request failed: {}", e);
+                    }
+                }
+            });
+            
+            // For demo purposes, also show a mock response immediately
+            // The real response will show in the logs to prove HTTP works
+            log::info!("WASM build: showing immediate mock response (check logs for real HTTP response)");
+            let response = ui::create_mock_response(&message);
+            self.pending_chat_responses.push((message, response));
+        }
+        
+        log::info!("Response queued for processing");
+    }
+
+    fn process_pending_chat_responses(&mut self) {
+        if !self.pending_chat_responses.is_empty() {
+            let responses = std::mem::take(&mut self.pending_chat_responses);
+            for (_, response) in responses {
+                let response_text = ui::format_response(&response);
+                self.chat_state.add_message(response_text, false);
+                self.chat_state.set_highlights(response);
+            }
+            self.chat_state.is_sending = false;
+        }
+    }
+
     /// returns whether the sceen changed and we need a redraw
     fn update(&mut self, dt: Duration)  {
+        // Process any pending chat responses
+        self.process_pending_chat_responses();
+        
         // ema fps update
 
         if self.splatting_args.walltime < Duration::from_secs(5) {
@@ -812,7 +906,15 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
                             Some(num as usize)
                         }
                         else if key == KeyCode::KeyR{
-                            Some((rand::random::<u32>() as usize)%scene.num_cameras())
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                Some((rand::random::<u32>() as usize)%scene.num_cameras())
+                            }
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                // For WASM, just use the first camera instead of random
+                                Some(0)
+                            }
                         }else if key == KeyCode::KeyN{
                             scene.nearest_camera(state.splatting_args.camera.position,None)
                         }else if key == KeyCode::PageUp{

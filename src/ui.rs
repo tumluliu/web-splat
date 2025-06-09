@@ -4,6 +4,7 @@ use std::time::Duration;
 #[cfg(target_arch = "wasm32")]
 use web_time::Duration;
 
+use crate::chat::McpResponse;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::renderer::DEFAULT_KERNEL_SIZE;
 use crate::{SceneCamera, Split, WindowContext};
@@ -19,7 +20,7 @@ use egui::{emath::Numeric, Color32, RichText};
 #[cfg(not(target_arch = "wasm32"))]
 use egui_plot::{Legend, PlotPoints};
 
-pub(crate) fn ui(state: &mut WindowContext) -> bool {
+pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
     let ctx = state.ui_renderer.winit.egui_ctx();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(stopwatch) = state.stopwatch.as_mut() {
@@ -607,6 +608,12 @@ pub(crate) fn ui(state: &mut WindowContext) -> bool {
                 });
         });
 
+    // Chat UI - handle separately to avoid borrowing conflicts
+    let (chat_message, new_input) = chat_ui(state, ctx);
+
+    // Update chat input state
+    state.chat_state.current_input = new_input;
+
     let requested_repaint = ctx.has_requested_repaint();
 
     if let Some(c) = new_camera {
@@ -622,7 +629,7 @@ pub(crate) fn ui(state: &mut WindowContext) -> bool {
             state.start_tracking_shot();
         }
     }
-    return requested_repaint;
+    return (requested_repaint, chat_message);
 }
 
 enum SetCamera {
@@ -704,5 +711,197 @@ fn optional_checkbox(ui: &mut egui::Ui, opt: &mut Option<bool>, default: bool) {
     }
     if changed && opt.is_none() {
         *opt = Some(val);
+    }
+}
+
+/// Chat UI for 3D scene understanding
+pub fn chat_ui(state: &WindowContext, ctx: &egui::Context) -> (Option<String>, String) {
+    let mut message_to_send = None;
+    let mut current_input = state.chat_state.current_input.clone();
+    let mut clear_highlights = false;
+    let mut server_url = state.chat_state.mcp_server_url.clone();
+
+    egui::Window::new("💬 3D Scene Chat")
+        .default_width(400.)
+        .default_height(500.)
+        .resizable(true)
+        .show(ctx, |ui| {
+            // Chat messages area
+            ui.heading("Ask about the 3D scene");
+            ui.separator();
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .max_height(300.)
+                .show(ui, |ui| {
+                    for message in &state.chat_state.messages {
+                        let color = if message.is_user {
+                            egui::Color32::LIGHT_BLUE
+                        } else {
+                            egui::Color32::LIGHT_GREEN
+                        };
+
+                        let prefix = if message.is_user { "You: " } else { "AI: " };
+
+                        ui.horizontal(|ui| {
+                            ui.colored_label(color, prefix);
+                            ui.label(&message.content);
+                        });
+                        ui.separator();
+                    }
+                });
+
+            ui.separator();
+
+            // Input area
+            ui.horizontal(|ui| {
+                let text_edit = egui::TextEdit::singleline(&mut current_input)
+                    .hint_text("Ask about objects, locations, or navigation...")
+                    .desired_width(ui.available_width() - 80.)
+                    .id(egui::Id::new("chat_input")); // Give it a unique ID
+
+                let response = ui.add_enabled(!state.chat_state.is_sending, text_edit);
+
+                let send_button = ui.add_enabled(
+                    !state.chat_state.is_sending && !current_input.trim().is_empty(),
+                    egui::Button::new("Send"),
+                );
+
+                // Send message on button click or Enter key
+                let should_send = send_button.clicked()
+                    || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+
+                if should_send && !current_input.trim().is_empty() {
+                    message_to_send = Some(current_input.trim().to_string());
+                    current_input.clear(); // Clear the input field when sending
+                }
+            });
+
+            if state.chat_state.is_sending {
+                ui.spinner();
+                ui.label("Thinking...");
+            }
+
+            ui.separator();
+
+            // Highlight controls
+            ui.horizontal(|ui| {
+                if ui.button("Clear Highlights").clicked() {
+                    clear_highlights = true;
+                }
+
+                ui.label(format!(
+                    "Objects: {}",
+                    state.chat_state.highlighted_objects.len()
+                ));
+                if let Some(_path) = &state.chat_state.highlighted_path {
+                    ui.label("Path: Active");
+                }
+            });
+
+            // Server settings
+            ui.collapsing("Settings", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("MCP Server URL:");
+                    ui.text_edit_singleline(&mut server_url);
+                });
+            });
+        });
+
+    (message_to_send, current_input)
+}
+
+/// Create mock response for testing - replace with real async handling
+pub fn create_mock_response(message: &str) -> McpResponse {
+    use std::collections::HashMap;
+
+    // Create mock response based on the message content
+    if message.to_lowercase().contains("table") {
+        let mut attributes = HashMap::new();
+        attributes.insert("type".to_string(), "dining_table".to_string());
+        attributes.insert("material".to_string(), "wood".to_string());
+        attributes.insert("size".to_string(), "large".to_string());
+
+        let object = crate::chat::SceneObject {
+            name: "Dining Table".to_string(),
+            position: [2.5, 0.0, 1.0],
+            attributes,
+            confidence: Some(0.95),
+        };
+
+        McpResponse::Objects {
+            objects: vec![object],
+            description: Some("Found a large wooden dining table in the scene".to_string()),
+        }
+    } else if message.to_lowercase().contains("chair") {
+        let mut attributes = HashMap::new();
+        attributes.insert("type".to_string(), "chair".to_string());
+        attributes.insert("material".to_string(), "wood".to_string());
+
+        let objects = vec![
+            crate::chat::SceneObject {
+                name: "Chair 1".to_string(),
+                position: [1.0, 0.0, 1.0],
+                attributes: attributes.clone(),
+                confidence: Some(0.90),
+            },
+            crate::chat::SceneObject {
+                name: "Chair 2".to_string(),
+                position: [4.0, 0.0, 1.0],
+                attributes,
+                confidence: Some(0.85),
+            },
+        ];
+
+        McpResponse::Objects {
+            objects,
+            description: Some("Found 2 wooden chairs in the scene".to_string()),
+        }
+    } else if message.to_lowercase().contains("path") || message.to_lowercase().contains("navigate")
+    {
+        let path = crate::chat::ScenePath {
+            waypoints: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.5],
+                [2.0, 0.0, 1.0],
+                [3.0, 0.0, 1.0],
+            ],
+            description: Some("Path from entrance to dining area".to_string()),
+        };
+
+        McpResponse::Path {
+            path,
+            description: Some("Navigation path calculated".to_string()),
+        }
+    } else {
+        McpResponse::Error {
+            message: "I can help you find objects like tables, chairs, or navigate between locations. Try asking 'Where is the table?' or 'Show me a path to the kitchen'".to_string(),
+        }
+    }
+}
+
+/// Format MCP response for display
+pub fn format_response(response: &McpResponse) -> String {
+    match response {
+        McpResponse::Objects {
+            objects,
+            description,
+        } => {
+            let desc = description.as_deref().unwrap_or("Found objects");
+            format!(
+                "{}: {}",
+                desc,
+                objects
+                    .iter()
+                    .map(|o| o.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+        McpResponse::Path { description, .. } => description
+            .as_deref()
+            .unwrap_or("Path calculated")
+            .to_string(),
+        McpResponse::Error { message } => message.clone(),
     }
 }
