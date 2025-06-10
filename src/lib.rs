@@ -12,7 +12,7 @@ use renderer::Display;
 use std::time::{Duration, Instant};
 use wgpu::{util::DeviceExt, Backends, Extent3d};
 
-use cgmath::{Deg, EuclideanSpace, Point3, Quaternion, UlpsEq, Vector2, Vector3};
+use cgmath::{Deg, EuclideanSpace, Matrix3, Point3, Quaternion, UlpsEq, Vector2, Vector3};
 use egui::FullOutput;
 use num_traits::One;
 
@@ -56,6 +56,8 @@ pub mod gpu_rs;
 mod ui_renderer;
 mod uniform;
 mod utils;
+mod highlighting;
+pub use highlighting::HighlightRenderer;
 
 pub struct RenderConfig {
     pub no_vsync: bool,
@@ -151,6 +153,7 @@ pub struct WindowContext {
     #[cfg(not(target_arch = "wasm32"))]
     history: RingBuffer<(Duration, Duration, Duration)>,
     display: Display,
+    highlight_renderer: HighlightRenderer,
 
     splatting_args: SplattingArgs,
 
@@ -253,6 +256,8 @@ impl WindowContext {
             size.height,
         );
 
+        let highlight_renderer = HighlightRenderer::new(device, surface_format.remove_srgb_suffix());
+
         let stopwatch = if cfg!(not(target_arch = "wasm32")) {
             Some(GPUStopwatch::new(device, Some(3)))
         } else {
@@ -290,6 +295,7 @@ impl WindowContext {
             history: RingBuffer::new(512),
             ui_visible: true,
             display,
+            highlight_renderer,
             saved_cameras: Vec::new(),
             #[cfg(feature = "video")]
             cameras_save_path: "cameras_saved.json".to_string(),
@@ -437,10 +443,70 @@ impl WindowContext {
             for (_, response) in responses {
                 let response_text = ui::format_response(&response);
                 self.chat_state.add_message(response_text, false);
-                self.chat_state.set_highlights(response);
+                self.chat_state.set_highlights(response.clone());
+                
+                // Update highlighting renderer and animate camera
+                self.update_highlights_and_animate(response);
             }
             self.chat_state.is_sending = false;
         }
+    }
+
+    fn update_highlights_and_animate(&mut self, response: McpResponse) {
+        match response {
+            McpResponse::Objects { objects, .. } => {
+                // Update highlighting renderer
+                self.highlight_renderer.set_highlighted_objects(objects.clone(), &self.wgpu_context.device);
+                self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
+                
+                // Animate camera to first object
+                if let Some(first_pos) = self.highlight_renderer.get_first_object_position() {
+                    self.animate_camera_to_position(first_pos);
+                }
+            }
+            McpResponse::Path { path, .. } => {
+                // Update highlighting renderer
+                self.highlight_renderer.set_highlighted_path(Some(path.clone()), &self.wgpu_context.device);
+                self.highlight_renderer.set_highlighted_objects(Vec::new(), &self.wgpu_context.device);
+                
+                // Animate camera to path start
+                if let Some(start_pos) = self.highlight_renderer.get_path_start_position() {
+                    self.animate_camera_to_position(start_pos);
+                }
+            }
+            McpResponse::Error { .. } => {
+                // Clear highlights on error
+                self.highlight_renderer.clear_highlights();
+            }
+        }
+    }
+
+    fn animate_camera_to_position(&mut self, target_pos: Point3<f32>) {
+        use cgmath::InnerSpace;
+        
+        // Calculate a good viewing position (offset from target)
+        let offset = Vector3::new(2.0, 1.5, 2.0); // Offset to view the object from a good angle
+        let camera_pos = target_pos + offset;
+        
+        // Look at the target
+        let look_dir = (target_pos - camera_pos).normalize();
+        let up = Vector3::new(0.0, 1.0, 0.0);
+        let right = look_dir.cross(up).normalize();
+        let corrected_up = right.cross(look_dir).normalize();
+        
+        // Create rotation matrix from look direction
+        let rotation_matrix = Matrix3::from_cols(right, corrected_up, -look_dir);
+        let rotation = Quaternion::from(rotation_matrix);
+        
+        // Create target camera
+        let target_camera = PerspectiveCamera::new(
+            camera_pos,
+            rotation,
+            self.splatting_args.camera.projection.clone(),
+        );
+        
+        // Animate to target
+        self.set_camera(target_camera, Duration::from_millis(1500));
     }
 
     /// returns whether the sceen changed and we need a redraw
@@ -573,6 +639,24 @@ impl WindowContext {
             self.renderer.camera(),
             &self.renderer.render_settings(),
         );
+
+        // Render highlights on top of the scene
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("highlight render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view_rgb,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            self.highlight_renderer.render(&mut render_pass, self.renderer.camera());
+        }
+
         self.stopwatch.as_mut().map(|s| s.end(&mut encoder));
 
         if let Some(state) = &ui_state {
