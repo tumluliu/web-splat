@@ -552,9 +552,9 @@ impl WindowContext {
         // Cancel any existing animation first
         self.animation.take();
         
-        // Force immediate camera update with exact parameters
-        self.update_camera(final_camera);
-        log::info!("Camera updated with exact parameters from debug info");
+        // Animate to the exact camera position with smooth transition
+        self.set_camera(final_camera, Duration::from_millis(1500));
+        log::info!("Camera animating to exact parameters from debug info");
     }
 
     /// returns whether the sceen changed and we need a redraw
