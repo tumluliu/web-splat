@@ -210,7 +210,7 @@ impl HighlightRenderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
+                topology: wgpu::PrimitiveTopology::LineStrip,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: None,
@@ -517,7 +517,7 @@ impl HighlightRenderer {
             }
 
             let mut vertices = Vec::new();
-            let path_color = Vector4::new(0.9, 0.7, 0.1, 0.9); // Golden yellow
+            let path_color = Vector4::new(0.9, 0.9, 0.3, 1.0); // Bright light yellow, fully opaque
 
             // Create line segments between waypoints
             for waypoint in &path.waypoints {

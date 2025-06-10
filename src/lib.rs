@@ -479,10 +479,8 @@ impl WindowContext {
                 self.highlight_renderer.set_highlighted_path(Some(path.clone()), &self.wgpu_context.device);
                 self.highlight_renderer.set_highlighted_objects(Vec::new(), &self.wgpu_context.device);
                 
-                // Animate camera to path start
-                if let Some(start_pos) = self.highlight_renderer.get_path_start_position() {
-                    self.animate_camera_to_position(start_pos);
-                }
+                // Animate camera along the path for navigation simulation
+                self.animate_camera_along_path(path);
             }
             McpResponse::Error { .. } => {
                 // Clear highlights on error
@@ -555,6 +553,153 @@ impl WindowContext {
         // Animate to the exact camera position with smooth transition
         self.set_camera(final_camera, Duration::from_millis(1500));
         log::info!("Camera animating to exact parameters from debug info");
+    }
+
+    fn animate_camera_along_path(&mut self, path: crate::chat::ScenePath) {
+        use cgmath::{Deg, Rad, Rotation3};
+        
+        if path.waypoints.is_empty() {
+            return;
+        }
+        
+        // Start from current camera position
+        let current_camera = self.splatting_args.camera.clone();
+        let mut path_cameras = Vec::new();
+        
+        // Add current camera position as starting point
+        let start_camera = SceneCamera::from_perspective(
+            current_camera,
+            "path_start".to_string(),
+            0,
+            Vector2::new(self.config.width, self.config.height),
+            crate::Split::Test,
+        );
+        path_cameras.push(start_camera);
+        
+        // Phase 1: Elegant transition to first waypoint
+        let first_waypoint = Point3::new(
+            path.waypoints[0][0], 
+            path.waypoints[0][1], 
+            path.waypoints[0][2]
+        );
+        
+        // Use exact camera parameters from debug screenshot for first waypoint
+        let first_camera_pos = Point3::new(-4.806, 3.351, -4.564);
+        
+        // Use exact rotation from debug screenshot: (-45.0°, -56.3°, -46.5°)
+        let rotation_x = Rad::from(Deg(-45.0));
+        let rotation_y = Rad::from(Deg(-56.3));
+        let rotation_z = Rad::from(Deg(-46.5));
+        let first_rotation = Quaternion::from(cgmath::Euler::new(rotation_x, rotation_y, rotation_z));
+        
+        // Use exact FOV from debug screenshot: (52.3°, 32.9°)
+        let fovx = Rad::from(Deg(52.3));
+        let fovy = Rad::from(Deg(32.9));
+        
+        // Create projection with exact parameters from debug screenshot
+        let first_projection = crate::camera::PerspectiveProjection {
+            fovx,
+            fovy,
+            znear: 0.055,  // From debug screenshot
+            zfar: 55.5,    // From debug screenshot
+            fov2view_ratio: fovx.0 / fovy.0,
+        };
+        
+        let first_path_camera = PerspectiveCamera::new(
+            first_camera_pos,
+            first_rotation,
+            first_projection,
+        );
+        
+        // Set view center from debug screenshot
+        self.controller.center = Point3::new(0.111, 3.030, -2.464);
+        
+        let first_scene_camera = SceneCamera::from_perspective(
+            first_path_camera,
+            "path_approach".to_string(),
+            1,
+            Vector2::new(self.config.width, self.config.height),
+            crate::Split::Test,
+        );
+        path_cameras.push(first_scene_camera);
+        
+        // Phase 2: Navigate along the path with proper directional orientation
+        for (i, waypoint) in path.waypoints.iter().enumerate() {
+            let waypoint_pos = Point3::new(waypoint[0], waypoint[1], waypoint[2]);
+            
+            // Position camera at consistent navigation height
+            let camera_pos = Point3::new(
+                waypoint_pos.x,
+                waypoint_pos.y - 1.0,  // Consistent navigation height
+                waypoint_pos.z
+            );
+            
+            // Calculate look direction based on path movement
+            let look_direction = if i < path.waypoints.len() - 1 {
+                // Look towards the next waypoint for forward movement
+                let next_waypoint = Point3::new(
+                    path.waypoints[i + 1][0],
+                    path.waypoints[i + 1][1], 
+                    path.waypoints[i + 1][2]
+                );
+                (next_waypoint - waypoint_pos).normalize()
+            } else {
+                // For last waypoint, maintain previous direction
+                if i > 0 {
+                    let prev_waypoint = Point3::new(
+                        path.waypoints[i - 1][0],
+                        path.waypoints[i - 1][1], 
+                        path.waypoints[i - 1][2]
+                    );
+                    (waypoint_pos - prev_waypoint).normalize()
+                } else {
+                    Vector3::new(0.0, 0.0, -1.0) // Default forward direction
+                }
+            };
+            
+            // Create rotation that looks in the direction of travel
+            let world_up = Vector3::new(0.0, 1.0, 0.0);
+            let look_at_rotation = Quaternion::look_at(look_direction, world_up);
+            
+            // Add slight downward tilt for better scene viewing
+            let right = look_direction.cross(world_up).normalize();
+            let tilt_rotation = Quaternion::from_axis_angle(right, Rad::from(Deg(15.0)));
+            let rotation = tilt_rotation * look_at_rotation;
+            
+            // Create camera with standard FOV
+            let camera = PerspectiveCamera::new(
+                camera_pos,
+                rotation,
+                self.splatting_args.camera.projection.clone(),
+            );
+            
+            // Convert to SceneCamera for the animation system
+            let scene_camera = SceneCamera::from_perspective(
+                camera,
+                format!("path_waypoint_{}", i),
+                i,
+                Vector2::new(self.config.width, self.config.height),
+                crate::Split::Test,
+            );
+            
+            path_cameras.push(scene_camera);
+        }
+        
+        // Create a tracking shot animation along the path
+        let duration = Duration::from_secs_f32(path_cameras.len() as f32 * 1.5); // 1.5 seconds per waypoint
+        let tracking_shot = crate::animation::TrackingShot::from_cameras(path_cameras);
+        let animation = crate::animation::Animation::new(
+            duration,
+            true,
+            Box::new(tracking_shot),
+        );
+        
+        // Cancel any existing animation and start path navigation
+        self.animation.take();
+        self.animation = Some((animation, true));
+        
+        log::info!("Started path navigation animation with {} waypoints over {:.1}s", 
+                   path.waypoints.len(), duration.as_secs_f32());
     }
 
     /// returns whether the sceen changed and we need a redraw

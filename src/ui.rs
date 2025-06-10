@@ -903,34 +903,50 @@ pub fn create_mock_response(message: &str) -> McpResponse {
     {
         let path = crate::chat::ScenePath {
             waypoints: vec![
-                [-2.0, 4.1, -3.0], // Start near entrance, walking level
-                [-1.0, 4.1, -2.5], // Move towards center, walking level
-                [0.0, 4.1, -2.0],  // Approach table, walking level
-                [0.5, 4.1, -1.8],  // Reach table, walking level
-                [1.5, 4.1, -1.5],  // Move to chair area, walking level
-                [2.0, 4.1, -1.0],  // End near corner, walking level
+                [-2.0, 4.1, -3.0], // Start near entrance
+                [-1.8, 4.1, -2.8], // Smooth curve point 1
+                [-1.5, 4.1, -2.5], // Smooth curve point 2
+                [-1.0, 4.1, -2.3], // Smooth curve point 3
+                [-0.5, 4.1, -2.1], // Approach center
+                [0.0, 4.1, -2.0],  // Center approach
+                [0.2, 4.1, -1.9],  // Fine adjustment 1
+                [0.4, 4.1, -1.8],  // Fine adjustment 2
+                [0.6, 4.1, -1.7],  // Table approach
+                [0.8, 4.1, -1.6],  // Near table
+                [1.0, 4.1, -1.5],  // Table vicinity
+                [1.2, 4.1, -1.4],  // Move around table
+                [1.4, 4.1, -1.3],  // Continue around
+                [1.6, 4.1, -1.2],  // Chair area approach
+                [1.8, 4.1, -1.1],  // Near chairs
+                [2.0, 4.1, -1.0],  // End at seating area
             ],
-            description: Some("Navigation path from entrance to seating area".to_string()),
+            description: Some("Smooth navigation path from entrance to seating area".to_string()),
         };
 
         McpResponse::Path {
             path,
-            description: Some("Calculated walking path through the room".to_string()),
+            description: Some("Calculated smooth walking path through the room".to_string()),
         }
     } else if message.to_lowercase().contains("kitchen") {
         let path = crate::chat::ScenePath {
             waypoints: vec![
-                [0.0, 4.1, -2.0], // Start at table, walking level
-                [1.0, 4.1, -3.0], // Move towards back, walking level
-                [2.0, 4.1, -3.5], // Approach kitchen area, walking level
-                [2.5, 4.1, -4.0], // Reach kitchen, walking level
+                [0.0, 4.1, -2.0], // Start at table
+                [0.3, 4.1, -2.2], // Move slightly back
+                [0.6, 4.1, -2.5], // Continue towards back
+                [0.9, 4.1, -2.8], // Smooth curve
+                [1.2, 4.1, -3.0], // Continue back
+                [1.5, 4.1, -3.2], // Approach kitchen area
+                [1.8, 4.1, -3.4], // Near kitchen
+                [2.0, 4.1, -3.5], // Kitchen approach
+                [2.2, 4.1, -3.7], // Final approach
+                [2.5, 4.1, -4.0], // Reach kitchen
             ],
-            description: Some("Path to kitchen area".to_string()),
+            description: Some("Smooth path to kitchen area".to_string()),
         };
 
         McpResponse::Path {
             path,
-            description: Some("Path from dining area to kitchen".to_string()),
+            description: Some("Smooth path from dining area to kitchen".to_string()),
         }
     } else if message.to_lowercase().contains("sofa") || message.to_lowercase().contains("couch") {
         let mut attributes = HashMap::new();
