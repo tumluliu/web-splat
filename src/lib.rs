@@ -12,7 +12,7 @@ use renderer::Display;
 use std::time::{Duration, Instant};
 use wgpu::{util::DeviceExt, Backends, Extent3d};
 
-use cgmath::{Deg, EuclideanSpace, Matrix3, Point3, Quaternion, UlpsEq, Vector2, Vector3};
+use cgmath::{Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, UlpsEq, Vector2, Vector3};
 use egui::FullOutput;
 use num_traits::One;
 
@@ -455,6 +455,16 @@ impl WindowContext {
     fn update_highlights_and_animate(&mut self, response: McpResponse) {
         match response {
             McpResponse::Objects { objects, .. } => {
+                // Log current camera position for debugging
+                let camera_pos = self.splatting_args.camera.position;
+                log::info!("Camera position: ({:.3}, {:.3}, {:.3})", camera_pos.x, camera_pos.y, camera_pos.z);
+                
+                // Log object positions for debugging
+                for (i, obj) in objects.iter().enumerate() {
+                    log::info!("Object {}: {} at position ({:.3}, {:.3}, {:.3})", 
+                        i + 1, obj.name, obj.position[0], obj.position[1], obj.position[2]);
+                }
+                
                 // Update highlighting renderer
                 self.highlight_renderer.set_highlighted_objects(objects.clone(), &self.wgpu_context.device);
                 self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
@@ -482,31 +492,69 @@ impl WindowContext {
     }
 
     fn animate_camera_to_position(&mut self, target_pos: Point3<f32>) {
-        use cgmath::InnerSpace;
+        use cgmath::{Deg, Rad};
         
-        // Calculate a good viewing position (offset from target)
-        let offset = Vector3::new(2.0, 1.5, 2.0); // Offset to view the object from a good angle
-        let camera_pos = target_pos + offset;
+        // Get the current camera position to understand the coordinate system
+        let current_pos = self.splatting_args.camera.position;
+        log::info!("Current camera before animation: ({:.3}, {:.3}, {:.3})", current_pos.x, current_pos.y, current_pos.z);
         
-        // Look at the target
-        let look_dir = (target_pos - camera_pos).normalize();
-        let up = Vector3::new(0.0, 1.0, 0.0);
-        let right = look_dir.cross(up).normalize();
-        let corrected_up = right.cross(look_dir).normalize();
-        
-        // Create rotation matrix from look direction
-        let rotation_matrix = Matrix3::from_cols(right, corrected_up, -look_dir);
-        let rotation = Quaternion::from(rotation_matrix);
-        
-        // Create target camera
-        let target_camera = PerspectiveCamera::new(
-            camera_pos,
-            rotation,
-            self.splatting_args.camera.projection.clone(),
+        // Use the exact camera parameters from your debug info for consistent results
+        // Position relative to target (offset from your working example)
+        let final_camera_pos = Point3::new(
+            target_pos.x + 2.0,  // +2 units in X 
+            target_pos.y - 6.0,  // -6 units in Y
+            target_pos.z + 3.0   // +3 units in Z
         );
         
-        // Animate to target
-        self.set_camera(target_camera, Duration::from_millis(1500));
+        // Set exact rotation from your debug info: (-121.9°, 17.8°, 170.0°)
+        let rotation_x = Rad::from(Deg(-121.9));
+        let rotation_y = Rad::from(Deg(17.8));
+        let rotation_z = Rad::from(Deg(170.0));
+        
+        // Create quaternion from Euler angles (note: cgmath uses ZYX order)
+        let rotation = Quaternion::from(cgmath::Euler::new(rotation_x, rotation_y, rotation_z));
+        
+        // Set exact FOV from your debug info: (52.3°, 32.9°)
+        let fovx = Rad::from(Deg(52.3));
+        let fovy = Rad::from(Deg(32.9));
+        
+        // Create projection with exact parameters
+        let projection = crate::camera::PerspectiveProjection {
+            fovx,
+            fovy,
+            znear: 0.059,  // From your debug info
+            zfar: 58.7,    // From your debug info
+            fov2view_ratio: fovx.0 / fovy.0,  // Calculate ratio
+        };
+        
+        // Set exact view center from your debug info: (-0.139, 3.634, -1.304)
+        let view_center_offset = Vector3::new(-0.139, 3.634, -1.304);
+        self.controller.center = Point3::new(
+            target_pos.x + view_center_offset.x,
+            target_pos.y + view_center_offset.y,
+            target_pos.z + view_center_offset.z,
+        );
+        
+        // Create camera with exact parameters
+        let final_camera = PerspectiveCamera::new(
+            final_camera_pos,
+            rotation,
+            projection,
+        );
+        
+        // Log the calculated camera position for debugging
+        log::info!("Exact camera positioning:");
+        log::info!("  Target: ({:.3}, {:.3}, {:.3})", target_pos.x, target_pos.y, target_pos.z);
+        log::info!("  Camera: ({:.3}, {:.3}, {:.3})", final_camera_pos.x, final_camera_pos.y, final_camera_pos.z);
+        log::info!("  Rotation: ({:.1}°, {:.1}°, {:.1}°)", -121.9, 17.8, 170.0);
+        log::info!("  View Center: ({:.3}, {:.3}, {:.3})", self.controller.center.x, self.controller.center.y, self.controller.center.z);
+        
+        // Cancel any existing animation first
+        self.animation.take();
+        
+        // Force immediate camera update with exact parameters
+        self.update_camera(final_camera);
+        log::info!("Camera updated with exact parameters from debug info");
     }
 
     /// returns whether the sceen changed and we need a redraw

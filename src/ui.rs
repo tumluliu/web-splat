@@ -828,13 +828,13 @@ pub fn create_mock_response(message: &str) -> McpResponse {
         attributes.insert("type".to_string(), "dining_table".to_string());
         attributes.insert("material".to_string(), "wood".to_string());
         attributes.insert("size".to_string(), "large".to_string());
-        attributes.insert("width".to_string(), "1.8".to_string());
-        attributes.insert("height".to_string(), "0.75".to_string());
-        attributes.insert("depth".to_string(), "1.0".to_string());
+        attributes.insert("width".to_string(), "2.0".to_string()); // More reasonable size
+        attributes.insert("height".to_string(), "1.0".to_string()); // More reasonable size
+        attributes.insert("depth".to_string(), "1.5".to_string()); // More reasonable size
 
         let object = crate::chat::SceneObject {
             name: "Dining Table".to_string(),
-            position: [0.5, 0.0, -2.0], // Center-left of scene
+            position: [0.0, 4.0, -0.8], // Same level as chairs, on the floor
             attributes,
             confidence: Some(0.95),
         };
@@ -849,26 +849,26 @@ pub fn create_mock_response(message: &str) -> McpResponse {
         let mut attributes = HashMap::new();
         attributes.insert("type".to_string(), "chair".to_string());
         attributes.insert("material".to_string(), "wood".to_string());
-        attributes.insert("width".to_string(), "0.5".to_string());
-        attributes.insert("height".to_string(), "0.9".to_string());
-        attributes.insert("depth".to_string(), "0.5".to_string());
+        attributes.insert("width".to_string(), "0.6".to_string());
+        attributes.insert("height".to_string(), "1.0".to_string());
+        attributes.insert("depth".to_string(), "0.6".to_string());
 
         let objects = vec![
             crate::chat::SceneObject {
                 name: "Chair 1".to_string(),
-                position: [-0.5, 0.0, -1.5], // Left side of table
+                position: [-0.8, 4.0, -0.5], // Near camera level to test
                 attributes: attributes.clone(),
                 confidence: Some(0.90),
             },
             crate::chat::SceneObject {
                 name: "Chair 2".to_string(),
-                position: [1.5, 0.0, -1.5], // Right side of table
+                position: [0.8, 4.0, -0.5], // Near camera level to test
                 attributes: attributes.clone(),
                 confidence: Some(0.85),
             },
             crate::chat::SceneObject {
                 name: "Chair 3".to_string(),
-                position: [0.5, 0.0, -1.0], // Front of table
+                position: [0.0, 4.0, -1.0], // Near camera level to test
                 attributes,
                 confidence: Some(0.88),
             },
@@ -888,7 +888,7 @@ pub fn create_mock_response(message: &str) -> McpResponse {
 
         let object = crate::chat::SceneObject {
             name: "Table Lamp".to_string(),
-            position: [2.0, 0.75, -2.0], // On a side table
+            position: [2.0, 4.5, -2.0], // On a side table, slightly above floor level
             attributes,
             confidence: Some(0.92),
         };
@@ -903,12 +903,12 @@ pub fn create_mock_response(message: &str) -> McpResponse {
     {
         let path = crate::chat::ScenePath {
             waypoints: vec![
-                [-2.0, 0.1, -3.0], // Start near entrance
-                [-1.0, 0.1, -2.5], // Move towards center
-                [0.0, 0.1, -2.0],  // Approach table
-                [0.5, 0.1, -1.8],  // Reach table
-                [1.5, 0.1, -1.5],  // Move to chair area
-                [2.0, 0.1, -1.0],  // End near corner
+                [-2.0, 4.1, -3.0], // Start near entrance, walking level
+                [-1.0, 4.1, -2.5], // Move towards center, walking level
+                [0.0, 4.1, -2.0],  // Approach table, walking level
+                [0.5, 4.1, -1.8],  // Reach table, walking level
+                [1.5, 4.1, -1.5],  // Move to chair area, walking level
+                [2.0, 4.1, -1.0],  // End near corner, walking level
             ],
             description: Some("Navigation path from entrance to seating area".to_string()),
         };
@@ -920,10 +920,10 @@ pub fn create_mock_response(message: &str) -> McpResponse {
     } else if message.to_lowercase().contains("kitchen") {
         let path = crate::chat::ScenePath {
             waypoints: vec![
-                [0.0, 0.1, -2.0], // Start at table
-                [1.0, 0.1, -3.0], // Move towards back
-                [2.0, 0.1, -3.5], // Approach kitchen area
-                [2.5, 0.1, -4.0], // Reach kitchen
+                [0.0, 4.1, -2.0], // Start at table, walking level
+                [1.0, 4.1, -3.0], // Move towards back, walking level
+                [2.0, 4.1, -3.5], // Approach kitchen area, walking level
+                [2.5, 4.1, -4.0], // Reach kitchen, walking level
             ],
             description: Some("Path to kitchen area".to_string()),
         };
@@ -943,7 +943,7 @@ pub fn create_mock_response(message: &str) -> McpResponse {
 
         let object = crate::chat::SceneObject {
             name: "Living Room Sofa".to_string(),
-            position: [-1.5, 0.0, 0.5], // Living area
+            position: [-1.5, 4.0, 0.5], // Living area, same level as chairs
             attributes,
             confidence: Some(0.93),
         };
