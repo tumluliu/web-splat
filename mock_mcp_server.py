@@ -108,6 +108,23 @@ MOCK_OBJECTS = [
         },
         "confidence": 0.88,
     },
+    {
+        "name": "Coffee Machine",
+        "position": [18.610, 2.469, 4.476],
+        "attributes": {
+            "type": "appliance",
+            "subtype": "coffee_machine",
+            "material": "stainless_steel",
+            "size": "medium",
+            "color": "black",
+            "width": "6.634",
+            "height": "6.785",
+            "depth": "5.602",
+            "brand": "premium",
+            "function": "brewing",
+        },
+        "confidence": 0.94,
+    },
 ]
 
 # Mock navigation paths
@@ -127,6 +144,26 @@ MOCK_PATHS = {
             [5.0, 0.0, -2.0],  # Sofa
         ],
         "description": "Path from entrance to living room sofa",
+    },
+    "kitchen_to_coffee": {
+        "waypoints": [
+            [0.0, 0.0, 2.5],  # Kitchen counter
+            [5.0, 1.0, 3.0],  # Midpoint 1
+            [10.0, 2.0, 3.5],  # Midpoint 2
+            [15.0, 2.2, 4.0],  # Approaching coffee area
+            [18.610, 2.469, 4.476],  # Coffee machine
+        ],
+        "description": "Path from kitchen counter to coffee machine",
+    },
+    "dining_to_coffee": {
+        "waypoints": [
+            [2.5, 0.0, 1.0],  # Dining table
+            [7.0, 1.0, 2.0],  # Midpoint 1
+            [12.0, 1.5, 3.0],  # Midpoint 2
+            [16.0, 2.0, 4.0],  # Approaching coffee area
+            [18.610, 2.469, 4.476],  # Coffee machine
+        ],
+        "description": "Path from dining table to coffee machine",
     },
 }
 
@@ -182,6 +219,15 @@ def find_objects_by_query(query):
             ]
         )
 
+    if "coffee" in query or "espresso" in query or "brew" in query:
+        matching_objects.extend(
+            [
+                obj
+                for obj in MOCK_OBJECTS
+                if "coffee_machine" in obj["attributes"].get("subtype", "")
+            ]
+        )
+
     # Handle size queries
     if "big" in query or "large" in query or "biggest" in query:
         matching_objects = [
@@ -217,6 +263,22 @@ def find_path_by_query(query):
         "door" in query and "living" in query
     ):
         return MOCK_PATHS["entrance_to_sofa"]
+
+    if ("kitchen" in query and "coffee" in query) or (
+        "counter" in query and "coffee" in query
+    ):
+        return MOCK_PATHS["kitchen_to_coffee"]
+
+    if ("dining" in query and "coffee" in query) or (
+        "table" in query and "coffee" in query
+    ):
+        return MOCK_PATHS["dining_to_coffee"]
+
+    # Handle generic coffee machine navigation
+    if "coffee" in query and any(
+        word in query for word in ["go", "navigate", "path", "route"]
+    ):
+        return MOCK_PATHS["dining_to_coffee"]  # Default path to coffee machine
 
     # Generate a random path if no specific match
     start = [0.0, 0.0, 0.0]

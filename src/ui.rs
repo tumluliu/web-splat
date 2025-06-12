@@ -968,9 +968,58 @@ pub fn create_mock_response(message: &str) -> McpResponse {
             objects: vec![object],
             description: Some("Found a comfortable sofa in the living area".to_string()),
         }
+    } else if message.to_lowercase().contains("coffee")
+        || message.to_lowercase().contains("espresso")
+        || message.to_lowercase().contains("brew")
+    {
+        let mut attributes = HashMap::new();
+        attributes.insert("type".to_string(), "appliance".to_string());
+        attributes.insert("subtype".to_string(), "coffee_machine".to_string());
+        attributes.insert("material".to_string(), "stainless_steel".to_string());
+        attributes.insert("size".to_string(), "medium".to_string());
+        attributes.insert("color".to_string(), "black".to_string());
+        attributes.insert("width".to_string(), "6.634".to_string());
+        attributes.insert("height".to_string(), "6.785".to_string());
+        attributes.insert("depth".to_string(), "5.602".to_string());
+        attributes.insert("brand".to_string(), "premium".to_string());
+        attributes.insert("function".to_string(), "brewing".to_string());
+
+        let object = crate::chat::SceneObject {
+            name: "Coffee Machine".to_string(),
+            position: [18.610, 2.469, 4.476], // Exact position from calculated vertices
+            attributes,
+            confidence: Some(0.94),
+        };
+
+        // Check if this is a navigation query to coffee machine
+        if message.to_lowercase().contains("navigate")
+            || message.to_lowercase().contains("path")
+            || message.to_lowercase().contains("go")
+        {
+            let path = crate::chat::ScenePath {
+                waypoints: vec![
+                    [2.5, 4.1, 1.0],        // Start at dining table
+                    [7.0, 4.1, 2.0],        // Midpoint 1
+                    [12.0, 3.5, 3.0],       // Midpoint 2
+                    [16.0, 3.0, 4.0],       // Approaching coffee area
+                    [18.610, 2.469, 4.476], // Coffee machine
+                ],
+                description: Some("Smooth path from dining area to coffee machine".to_string()),
+            };
+
+            McpResponse::Path {
+                path,
+                description: Some("Calculated path to the premium coffee machine".to_string()),
+            }
+        } else {
+            McpResponse::Objects {
+                objects: vec![object],
+                description: Some("Found a premium stainless steel coffee machine".to_string()),
+            }
+        }
     } else {
         McpResponse::Error {
-            message: "I can help you find objects like tables, chairs, lamps, sofas, or navigate between locations. Try asking 'Where is the table?' or 'Show me a path to the kitchen'".to_string(),
+            message: "I can help you find objects like tables, chairs, lamps, sofas, coffee machines, or navigate between locations. Try asking 'Where is the coffee machine?' or 'Show me a path to the coffee machine'".to_string(),
         }
     }
 }
