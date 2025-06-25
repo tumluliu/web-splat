@@ -500,9 +500,9 @@ impl WindowContext {
             self.highlight_renderer.set_highlighted_objects(response.answer.clone(), &self.wgpu_context.device);
             self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
             
-            // Animate camera to first object
-            if let Some(first_pos) = self.highlight_renderer.get_first_object_position() {
-                self.animate_camera_to_position(first_pos);
+            // Animate camera to first object with intelligent positioning
+            if let Some((target_center, optimal_camera_pos, object_size)) = self.highlight_renderer.get_first_object_viewing_info() {
+                self.animate_camera_to_optimal_position(target_center, optimal_camera_pos, object_size);
             }
         } else {
             // Clear highlights if no objects found
@@ -510,70 +510,65 @@ impl WindowContext {
         }
     }
 
-    fn animate_camera_to_position(&mut self, target_pos: Point3<f32>) {
-        use cgmath::{Deg, Rad};
+    fn animate_camera_to_optimal_position(&mut self, target_center: Point3<f32>, optimal_camera_pos: Point3<f32>, object_size: f32) {
+        use cgmath::{Deg, Rad, Rotation3};
         
-        // Get the current camera position to understand the coordinate system
+        // Get the current camera position for debugging
         let current_pos = self.splatting_args.camera.position;
         log::info!("Current camera before animation: ({:.3}, {:.3}, {:.3})", current_pos.x, current_pos.y, current_pos.z);
         
-        // Use the exact camera parameters from your debug info for consistent results
-        // Position relative to target (offset from your working example)
-        let final_camera_pos = Point3::new(
-            target_pos.x + 2.0,  // +2 units in X 
-            target_pos.y - 6.0,  // -6 units in Y
-            target_pos.z + 3.0   // +3 units in Z
-        );
+        // Calculate look direction from camera position to target center
+        let look_direction = (target_center - optimal_camera_pos).normalize();
         
-        // Set exact rotation from your debug info: (-121.9°, 17.8°, 170.0°)
-        let rotation_x = Rad::from(Deg(-121.9));
-        let rotation_y = Rad::from(Deg(17.8));
-        let rotation_z = Rad::from(Deg(170.0));
+        // Create a "look at" rotation - camera looks toward the object center
+        let world_up = Vector3::new(0.0, 1.0, 0.0);
+        let rotation = Quaternion::look_at(look_direction, world_up);
         
-        // Create quaternion from Euler angles (note: cgmath uses ZYX order)
-        let rotation = Quaternion::from(cgmath::Euler::new(rotation_x, rotation_y, rotation_z));
+        // Add slight downward tilt for better viewing angle
+        let right = look_direction.cross(world_up).normalize();
+        let tilt_angle = Rad::from(Deg(15.0)); // 15 degree downward tilt
+        let tilt_rotation = Quaternion::from_axis_angle(right, tilt_angle);
+        let final_rotation = tilt_rotation * rotation;
         
-        // Set exact FOV from your debug info: (52.3°, 32.9°)
-        let fovx = Rad::from(Deg(52.3));
-        let fovy = Rad::from(Deg(32.9));
+        // Set appropriate FOV based on object size
+        let base_fov = Deg(45.0);
+        let fov_adjustment = (object_size / 10.0).min(1.5).max(0.5); // Scale FOV reasonably
+        let fovx = Rad::from(base_fov * fov_adjustment);
+        let fovy = Rad::from(base_fov * fov_adjustment);
         
-        // Create projection with exact parameters
+        // Create projection with calculated parameters
         let projection = crate::camera::PerspectiveProjection {
             fovx,
             fovy,
-            znear: 0.059,  // From your debug info
-            zfar: 58.7,    // From your debug info
-            fov2view_ratio: fovx.0 / fovy.0,  // Calculate ratio
+            znear: (object_size * 0.1).max(0.01),  // Near plane based on object size
+            zfar: (object_size * 10.0).max(100.0),  // Far plane based on object size
+            fov2view_ratio: fovx.0 / fovy.0,
         };
         
-        // Set exact view center from your debug info: (-0.139, 3.634, -1.304)
-        let view_center_offset = Vector3::new(-0.139, 3.634, -1.304);
-        self.controller.center = Point3::new(
-            target_pos.x + view_center_offset.x,
-            target_pos.y + view_center_offset.y,
-            target_pos.z + view_center_offset.z,
-        );
+        // Set controller center to the object center for proper orbiting
+        self.controller.center = target_center;
         
-        // Create camera with exact parameters
+        // Create the optimized camera
         let final_camera = PerspectiveCamera::new(
-            final_camera_pos,
-            rotation,
+            optimal_camera_pos,
+            final_rotation,
             projection,
         );
         
-        // Log the calculated camera position for debugging
-        log::info!("Exact camera positioning:");
-        log::info!("  Target: ({:.3}, {:.3}, {:.3})", target_pos.x, target_pos.y, target_pos.z);
-        log::info!("  Camera: ({:.3}, {:.3}, {:.3})", final_camera_pos.x, final_camera_pos.y, final_camera_pos.z);
-        log::info!("  Rotation: ({:.1}°, {:.1}°, {:.1}°)", -121.9, 17.8, 170.0);
-        log::info!("  View Center: ({:.3}, {:.3}, {:.3})", self.controller.center.x, self.controller.center.y, self.controller.center.z);
+        // Log the calculated positioning for debugging
+        log::info!("Intelligent camera positioning:");
+        log::info!("  Object center: ({:.3}, {:.3}, {:.3})", target_center.x, target_center.y, target_center.z);
+        log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", optimal_camera_pos.x, optimal_camera_pos.y, optimal_camera_pos.z);
+        log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
+        log::info!("  Object size: {:.3}", object_size);
+        log::info!("  FOV: {:.1}°", base_fov.0 * fov_adjustment);
         
         // Cancel any existing animation first
         self.animation.take();
         
-        // Animate to the exact camera position with smooth transition
+        // Animate to the optimal camera position with smooth transition
         self.set_camera(final_camera, Duration::from_millis(1500));
-        log::info!("Camera animating to exact parameters from debug info");
+        log::info!("Camera animating to intelligent front-facing position");
     }
 
     fn animate_camera_along_path(&mut self, path: crate::chat::ScenePath) {

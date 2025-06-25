@@ -1,7 +1,7 @@
 use crate::chat::{SceneObject, ScenePath};
 use crate::renderer::CameraUniform;
 use crate::uniform::UniformBuffer;
-use cgmath::{Matrix4, Point3, Vector3, Vector4};
+use cgmath::{EuclideanSpace, InnerSpace, Matrix4, Point3, Vector3, Vector4};
 use wgpu::{
     include_wgsl, util::DeviceExt, BufferUsages, VertexAttribute, VertexBufferLayout, VertexFormat,
     VertexStepMode,
@@ -429,16 +429,22 @@ impl HighlightRenderer {
                     })
                     .collect();
 
-                // Add faces for solid box (same cube topology as before)
+                // Add faces for solid box using MCP server vertex ordering
                 // Face indices for solid cube rendering (6 faces, 2 triangles each)
+                // MCP ordering: 0=bottom back left, 1=bottom back right, 2=bottom front right, 3=bottom front left
+                //               4=top back left,    5=top back right,    6=top front right,    7=top front left
                 let face_indices = [
-                    // Front face (vertices 0,1,2,3)
-                    0, 1, 2, 2, 3, 0, // Back face (vertices 4,7,6,5) - note winding order
-                    4, 7, 6, 6, 5, 4, // Left face (vertices 4,0,3,7)
-                    4, 0, 3, 3, 7, 4, // Right face (vertices 1,5,6,2)
-                    1, 5, 6, 6, 2, 1, // Bottom face (vertices 4,5,1,0)
-                    4, 5, 1, 1, 0, 4, // Top face (vertices 3,2,6,7)
+                    // Front face (vertices 3,2,6,7) - front left, front right, top front right, top front left
                     3, 2, 6, 6, 7, 3,
+                    // Back face (vertices 0,1,5,4) - back left, back right, top back right, top back left
+                    0, 1, 5, 5, 4, 0,
+                    // Left face (vertices 0,3,7,4) - back left, front left, top front left, top back left
+                    0, 3, 7, 7, 4, 0,
+                    // Right face (vertices 1,2,6,5) - back right, front right, top front right, top back right
+                    1, 2, 6, 6, 5, 1,
+                    // Bottom face (vertices 0,1,2,3) - all bottom vertices
+                    0, 1, 2, 2, 3, 0, // Top face (vertices 4,5,6,7) - all top vertices
+                    4, 5, 6, 6, 7, 4,
                 ];
 
                 // Add vertices for each triangle in the solid box
@@ -446,11 +452,12 @@ impl HighlightRenderer {
                     all_box_vertices.push(vertices[index]);
                 }
 
-                // Add edges for wireframe (same edge topology as before)
+                // Add edges for wireframe using MCP server vertex ordering
                 let edge_indices = [
-                    // Bottom face edges
-                    0, 1, 1, 2, 2, 3, 3, 0, // Top face edges
-                    4, 5, 5, 6, 6, 7, 7, 4, // Vertical edges
+                    // Bottom face edges (0=back left, 1=back right, 2=front right, 3=front left)
+                    0, 1, 1, 2, 2, 3, 3, 0,
+                    // Top face edges (4=back left, 5=back right, 6=front right, 7=front left)
+                    4, 5, 5, 6, 6, 7, 7, 4, // Vertical edges connecting bottom to top
                     0, 4, 1, 5, 2, 6, 3, 7,
                 ];
 
@@ -582,6 +589,85 @@ impl HighlightRenderer {
                 Point3::new(center[0], center[1], center[2])
             } else {
                 Point3::new(0.0, 0.0, 0.0)
+            }
+        })
+    }
+
+    /// Get optimal camera viewing position for the first object based on its orientation
+    pub fn get_first_object_viewing_info(&self) -> Option<(Point3<f32>, Point3<f32>, f32)> {
+        self.highlighted_objects.first().and_then(|obj| {
+            if obj.aligned_bbox.len() >= 8 {
+                // Calculate center
+                let mut center = Vector3::new(0.0, 0.0, 0.0);
+                for point in &obj.aligned_bbox {
+                    center.x += point[0];
+                    center.y += point[1];
+                    center.z += point[2];
+                }
+                center /= 8.0;
+
+                // Convert bbox points to Vector3 for easier math
+                let bbox_points: Vec<Vector3<f32>> = obj
+                    .aligned_bbox
+                    .iter()
+                    .map(|p| Vector3::new(p[0], p[1], p[2]))
+                    .collect();
+
+                // Calculate object's local coordinate system from the bounding box
+                // MCP server vertex ordering:
+                // 0: bottom back left,  1: bottom back right,  2: bottom front right, 3: bottom front left
+                // 4: top back left,     5: top back right,     6: top front right,    7: top front left
+
+                // Front face is vertices 2,3,6,7 (front right/left, bottom/top)
+                // Back face is vertices 0,1,4,5 (back left/right, bottom/top)
+                let front_edge = bbox_points[2] - bbox_points[3]; // bottom front right - bottom front left = right direction of front face
+                let side_edge = bbox_points[0] - bbox_points[3]; // bottom back left - bottom front left = depth direction (front to back)
+                let up_edge = bbox_points[4] - bbox_points[0]; // top back left - bottom back left = up direction
+
+                // Calculate object's forward direction (perpendicular to front face, pointing outward)
+                // Since side_edge goes from front to back, we need to negate it to get front-pointing direction
+                let forward_dir = front_edge.cross(up_edge).normalize();
+
+                // Calculate object size for appropriate camera distance
+                let width = front_edge.magnitude();
+                let depth = side_edge.magnitude();
+                let height = up_edge.magnitude();
+                let max_dimension = width.max(depth).max(height);
+
+                // Position camera in front of the object at an appropriate distance
+                let camera_distance = max_dimension * 2.5; // Adjust multiplier as needed
+                let camera_position = Point3::from_vec(center + forward_dir * camera_distance);
+
+                log::info!("Object viewing analysis:");
+                log::info!(
+                    "  Center: ({:.3}, {:.3}, {:.3})",
+                    center.x,
+                    center.y,
+                    center.z
+                );
+                log::info!(
+                    "  Forward dir: ({:.3}, {:.3}, {:.3})",
+                    forward_dir.x,
+                    forward_dir.y,
+                    forward_dir.z
+                );
+                log::info!(
+                    "  Dimensions: W={:.3}, D={:.3}, H={:.3}",
+                    width,
+                    depth,
+                    height
+                );
+                log::info!("  Camera distance: {:.3}", camera_distance);
+                log::info!(
+                    "  Camera position: ({:.3}, {:.3}, {:.3})",
+                    camera_position.x,
+                    camera_position.y,
+                    camera_position.z
+                );
+
+                Some((Point3::from_vec(center), camera_position, max_dimension))
+            } else {
+                None
             }
         })
     }
