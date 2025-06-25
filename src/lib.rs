@@ -517,7 +517,7 @@ impl WindowContext {
         let current_pos = self.splatting_args.camera.position;
         log::info!("Current camera before animation: ({:.3}, {:.3}, {:.3})", current_pos.x, current_pos.y, current_pos.z);
         
-        // Calculate look direction from camera position to target center
+        // Calculate look direction from camera position to target center (object center, not front face)
         let look_direction = (target_center - optimal_camera_pos).normalize();
         
         // Create a "look at" rotation - camera looks toward the object center

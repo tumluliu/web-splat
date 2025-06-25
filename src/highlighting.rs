@@ -614,36 +614,57 @@ impl HighlightRenderer {
                     .collect();
 
                 // Calculate object's local coordinate system from the bounding box
-                // MCP server vertex ordering:
+                // MCP server vertex ordering (VERIFIED):
                 // 0: bottom back left,  1: bottom back right,  2: bottom front right, 3: bottom front left
                 // 4: top back left,     5: top back right,     6: top front right,    7: top front left
 
-                // Front face is vertices 2,3,6,7 (front right/left, bottom/top)
-                // Back face is vertices 0,1,4,5 (back left/right, bottom/top)
-                let front_edge = bbox_points[2] - bbox_points[3]; // bottom front right - bottom front left = right direction of front face
-                let side_edge = bbox_points[0] - bbox_points[3]; // bottom back left - bottom front left = depth direction (front to back)
-                let up_edge = bbox_points[4] - bbox_points[0]; // top back left - bottom back left = up direction
+                // Calculate centers of front and back faces to get reliable forward direction
+                let front_face_center =
+                    (bbox_points[2] + bbox_points[3] + bbox_points[6] + bbox_points[7]) / 4.0;
+                // front face: 2=bottom front right, 3=bottom front left, 6=top front right, 7=top front left
 
-                // Calculate object's forward direction (perpendicular to front face, pointing outward)
-                // Since side_edge goes from front to back, we need to negate it to get front-pointing direction
-                let forward_dir = front_edge.cross(up_edge).normalize();
+                let back_face_center =
+                    (bbox_points[0] + bbox_points[1] + bbox_points[4] + bbox_points[5]) / 4.0;
+                // back face: 0=bottom back left, 1=bottom back right, 4=top back left, 5=top back right
 
-                // Calculate object size for appropriate camera distance
-                let width = front_edge.magnitude();
-                let depth = side_edge.magnitude();
-                let height = up_edge.magnitude();
+                // Forward direction is from back face center to front face center (pointing outward from front face)
+                let forward_dir = (front_face_center - back_face_center).normalize();
+
+                // Calculate object dimensions for appropriate camera distance
+                let width = (bbox_points[2] - bbox_points[3]).magnitude(); // front face width (front right - front left)
+                let depth = (front_face_center - back_face_center).magnitude(); // object depth (front to back distance)
+                let height = (bbox_points[7] - bbox_points[3]).magnitude(); // object height (top front left - bottom front left)
                 let max_dimension = width.max(depth).max(height);
 
-                // Position camera in front of the object at an appropriate distance
-                let camera_distance = max_dimension * 2.5; // Adjust multiplier as needed
-                let camera_position = Point3::from_vec(center + forward_dir * camera_distance);
+                // Position camera in front of the object at a proper distance and height
+                let camera_distance = max_dimension * 2.8; // Good viewing distance
+                let height_offset = height * 0.4; // Position camera above object center for better angle
+
+                // Start from object center, move toward front face, then forward by camera distance, then up by height offset
+                let camera_position = Point3::from_vec(
+                    center
+                        + forward_dir * (depth * 0.5 + camera_distance)
+                        + Vector3::new(0.0, height_offset, 0.0),
+                );
 
                 log::info!("Object viewing analysis:");
                 log::info!(
-                    "  Center: ({:.3}, {:.3}, {:.3})",
+                    "  Object center: ({:.3}, {:.3}, {:.3})",
                     center.x,
                     center.y,
                     center.z
+                );
+                log::info!(
+                    "  Front face center: ({:.3}, {:.3}, {:.3})",
+                    front_face_center.x,
+                    front_face_center.y,
+                    front_face_center.z
+                );
+                log::info!(
+                    "  Back face center: ({:.3}, {:.3}, {:.3})",
+                    back_face_center.x,
+                    back_face_center.y,
+                    back_face_center.z
                 );
                 log::info!(
                     "  Forward dir: ({:.3}, {:.3}, {:.3})",
@@ -658,6 +679,7 @@ impl HighlightRenderer {
                     height
                 );
                 log::info!("  Camera distance: {:.3}", camera_distance);
+                log::info!("  Height offset: {:.3}", height_offset);
                 log::info!(
                     "  Camera position: ({:.3}, {:.3}, {:.3})",
                     camera_position.x,
