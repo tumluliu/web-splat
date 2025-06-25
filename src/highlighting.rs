@@ -20,6 +20,8 @@ pub struct HighlightRenderer {
     highlighted_path: Option<ScenePath>,
     box_instances_buffer: Option<wgpu::Buffer>,
     wireframe_instances_buffer: Option<wgpu::Buffer>,
+    box_vertex_count: u32,
+    wireframe_vertex_count: u32,
     path_vertex_count: u32,
 }
 
@@ -27,6 +29,13 @@ pub struct HighlightRenderer {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct BoxInstance {
     model_matrix: Matrix4<f32>,
+    color: Vector4<f32>,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct ColoredVertex {
+    position: Vector3<f32>,
     color: Vector4<f32>,
 }
 
@@ -61,6 +70,8 @@ impl HighlightRenderer {
             highlighted_path: None,
             box_instances_buffer: None,
             wireframe_instances_buffer: None,
+            box_vertex_count: 0,
+            wireframe_vertex_count: 0,
             path_vertex_count: 0,
         }
     }
@@ -75,7 +86,7 @@ impl HighlightRenderer {
             push_constant_ranges: &[],
         });
 
-        let shader = device.create_shader_module(include_wgsl!("shaders/highlight_box.wgsl"));
+        let shader = device.create_shader_module(include_wgsl!("shaders/highlight_direct.wgsl"));
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("highlight box pipeline"),
@@ -84,52 +95,19 @@ impl HighlightRenderer {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[
-                    // Vertex positions (unit cube corners)
+                    // Direct colored vertices (position + color)
                     VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Vector3<f32>>() as wgpu::BufferAddress,
+                        array_stride: std::mem::size_of::<ColoredVertex>() as wgpu::BufferAddress,
                         step_mode: VertexStepMode::Vertex,
-                        attributes: &[VertexAttribute {
-                            offset: 0,
-                            shader_location: 0,
-                            format: VertexFormat::Float32x3,
-                        }],
-                    },
-                    // Instance data (transformation matrix + color)
-                    VertexBufferLayout {
-                        array_stride: std::mem::size_of::<BoxInstance>() as wgpu::BufferAddress,
-                        step_mode: VertexStepMode::Instance,
                         attributes: &[
-                            // Matrix column 0
                             VertexAttribute {
                                 offset: 0,
+                                shader_location: 0,
+                                format: VertexFormat::Float32x3,
+                            },
+                            VertexAttribute {
+                                offset: std::mem::size_of::<Vector3<f32>>() as wgpu::BufferAddress,
                                 shader_location: 1,
-                                format: VertexFormat::Float32x4,
-                            },
-                            // Matrix column 1
-                            VertexAttribute {
-                                offset: std::mem::size_of::<Vector4<f32>>() as wgpu::BufferAddress,
-                                shader_location: 2,
-                                format: VertexFormat::Float32x4,
-                            },
-                            // Matrix column 2
-                            VertexAttribute {
-                                offset: 2 * std::mem::size_of::<Vector4<f32>>()
-                                    as wgpu::BufferAddress,
-                                shader_location: 3,
-                                format: VertexFormat::Float32x4,
-                            },
-                            // Matrix column 3
-                            VertexAttribute {
-                                offset: 3 * std::mem::size_of::<Vector4<f32>>()
-                                    as wgpu::BufferAddress,
-                                shader_location: 4,
-                                format: VertexFormat::Float32x4,
-                            },
-                            // Color
-                            VertexAttribute {
-                                offset: 4 * std::mem::size_of::<Vector4<f32>>()
-                                    as wgpu::BufferAddress,
-                                shader_location: 5,
                                 format: VertexFormat::Float32x4,
                             },
                         ],
@@ -274,7 +252,7 @@ impl HighlightRenderer {
             push_constant_ranges: &[],
         });
 
-        let shader = device.create_shader_module(include_wgsl!("shaders/highlight_box.wgsl"));
+        let shader = device.create_shader_module(include_wgsl!("shaders/highlight_direct.wgsl"));
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("highlight wireframe pipeline"),
@@ -283,45 +261,19 @@ impl HighlightRenderer {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[
+                    // Direct colored vertices (position + color)
                     VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Vector3<f32>>() as wgpu::BufferAddress,
+                        array_stride: std::mem::size_of::<ColoredVertex>() as wgpu::BufferAddress,
                         step_mode: VertexStepMode::Vertex,
-                        attributes: &[VertexAttribute {
-                            offset: 0,
-                            shader_location: 0,
-                            format: VertexFormat::Float32x3,
-                        }],
-                    },
-                    VertexBufferLayout {
-                        array_stride: std::mem::size_of::<BoxInstance>() as wgpu::BufferAddress,
-                        step_mode: VertexStepMode::Instance,
                         attributes: &[
                             VertexAttribute {
                                 offset: 0,
+                                shader_location: 0,
+                                format: VertexFormat::Float32x3,
+                            },
+                            VertexAttribute {
+                                offset: std::mem::size_of::<Vector3<f32>>() as wgpu::BufferAddress,
                                 shader_location: 1,
-                                format: VertexFormat::Float32x4,
-                            },
-                            VertexAttribute {
-                                offset: std::mem::size_of::<Vector4<f32>>() as wgpu::BufferAddress,
-                                shader_location: 2,
-                                format: VertexFormat::Float32x4,
-                            },
-                            VertexAttribute {
-                                offset: 2 * std::mem::size_of::<Vector4<f32>>()
-                                    as wgpu::BufferAddress,
-                                shader_location: 3,
-                                format: VertexFormat::Float32x4,
-                            },
-                            VertexAttribute {
-                                offset: 3 * std::mem::size_of::<Vector4<f32>>()
-                                    as wgpu::BufferAddress,
-                                shader_location: 4,
-                                format: VertexFormat::Float32x4,
-                            },
-                            VertexAttribute {
-                                offset: 4 * std::mem::size_of::<Vector4<f32>>()
-                                    as wgpu::BufferAddress,
-                                shader_location: 5,
                                 format: VertexFormat::Float32x4,
                             },
                         ],
@@ -408,6 +360,8 @@ impl HighlightRenderer {
         self.box_instances_buffer = None;
         self.wireframe_instances_buffer = None;
         self.path_vertex_buffer = None;
+        self.box_vertex_count = 0;
+        self.wireframe_vertex_count = 0;
         self.path_vertex_count = 0;
     }
 
@@ -419,79 +373,22 @@ impl HighlightRenderer {
         }
 
         log::info!(
-            "Creating bounding boxes for {} objects",
+            "Creating exact bounding boxes for {} objects using MCP server coordinates",
             self.highlighted_objects.len()
         );
 
-        let (box_instances, wireframe_instances): (Vec<BoxInstance>, Vec<BoxInstance>) = self
-            .highlighted_objects
-            .iter()
-            .enumerate()
-            .map(|(i, obj)| {
-                // Calculate bounding box center and size from aligned_bbox points
-                let (position, width, height, depth) = if obj.aligned_bbox.len() >= 8 {
-                    // Calculate center from all 8 points
-                    let mut center = [0.0, 0.0, 0.0];
-                    for point in &obj.aligned_bbox {
-                        center[0] += point[0];
-                        center[1] += point[1];
-                        center[2] += point[2];
-                    }
-                    center[0] /= 8.0;
-                    center[1] /= 8.0;
-                    center[2] /= 8.0;
+        // Create vertex buffers using exact coordinates from MCP server
+        let mut all_box_vertices = Vec::new();
+        let mut all_wireframe_vertices = Vec::new();
 
-                    // Calculate size from min/max points
-                    let mut min_point = obj.aligned_bbox[0];
-                    let mut max_point = obj.aligned_bbox[0];
-                    for point in &obj.aligned_bbox {
-                        for i in 0..3 {
-                            min_point[i] = min_point[i].min(point[i]);
-                            max_point[i] = max_point[i].max(point[i]);
-                        }
-                    }
+        for (i, obj) in self.highlighted_objects.iter().enumerate() {
+            if obj.aligned_bbox.len() >= 8 {
+                log::info!(
+                    "Using exact 8 vertices from MCP server for object: {}",
+                    obj.name
+                );
 
-                    let width = max_point[0] - min_point[0];
-                    let height = max_point[1] - min_point[1];
-                    let depth = max_point[2] - min_point[2];
-
-                    (
-                        Point3::new(center[0], center[1], center[2]),
-                        width,
-                        height,
-                        depth,
-                    )
-                } else {
-                    // Fallback: use attributes if available, or defaults
-                    let width = obj
-                        .attributes
-                        .as_ref()
-                        .and_then(|attrs| attrs.get("width"))
-                        .and_then(|w| w.parse::<f32>().ok())
-                        .unwrap_or(5.0);
-                    let height = obj
-                        .attributes
-                        .as_ref()
-                        .and_then(|attrs| attrs.get("height"))
-                        .and_then(|h| h.parse::<f32>().ok())
-                        .unwrap_or(3.0);
-                    let depth = obj
-                        .attributes
-                        .as_ref()
-                        .and_then(|attrs| attrs.get("depth"))
-                        .and_then(|d| d.parse::<f32>().ok())
-                        .unwrap_or(5.0);
-
-                    (Point3::new(0.0, 0.0, 0.0), width, height, depth)
-                };
-
-                // Create transformation matrix
-                let scale_matrix = Matrix4::from_nonuniform_scale(width, height, depth);
-                let translation_matrix =
-                    Matrix4::from_translation(Vector3::new(position.x, position.y, position.z));
-                let model_matrix = translation_matrix * scale_matrix;
-
-                // Cycle through colors for different objects - bright, moderately transparent colors for solid boxes
+                // Cycle through colors for different objects
                 let solid_colors = [
                     Vector4::new(1.0, 0.0, 0.0, 0.25), // Red with moderate transparency
                     Vector4::new(0.0, 1.0, 0.0, 0.25), // Green with moderate transparency
@@ -501,7 +398,6 @@ impl HighlightRenderer {
                     Vector4::new(0.0, 1.0, 1.0, 0.25), // Cyan with moderate transparency
                 ];
 
-                // Bright, highly opaque colors for wireframe edges to make them thick and prominent
                 let wireframe_colors = [
                     Vector4::new(1.0, 0.2, 0.2, 0.8), // Bright red, mostly opaque
                     Vector4::new(0.2, 1.0, 0.2, 0.8), // Bright green, mostly opaque
@@ -514,35 +410,91 @@ impl HighlightRenderer {
                 let solid_color = solid_colors[i % solid_colors.len()];
                 let wireframe_color = wireframe_colors[i % wireframe_colors.len()];
 
-                let box_instance = BoxInstance {
-                    model_matrix,
-                    color: solid_color,
-                };
+                // Convert the 8 MCP vertices to our vertex format
+                let vertices: Vec<ColoredVertex> = obj
+                    .aligned_bbox
+                    .iter()
+                    .map(|point| ColoredVertex {
+                        position: Vector3::new(point[0], point[1], point[2]),
+                        color: solid_color,
+                    })
+                    .collect();
 
-                let wireframe_instance = BoxInstance {
-                    model_matrix,
-                    color: wireframe_color,
-                };
+                let wireframe_vertices: Vec<ColoredVertex> = obj
+                    .aligned_bbox
+                    .iter()
+                    .map(|point| ColoredVertex {
+                        position: Vector3::new(point[0], point[1], point[2]),
+                        color: wireframe_color,
+                    })
+                    .collect();
 
-                (box_instance, wireframe_instance)
-            })
-            .unzip();
+                // Add faces for solid box (same cube topology as before)
+                // Face indices for solid cube rendering (6 faces, 2 triangles each)
+                let face_indices = [
+                    // Front face (vertices 0,1,2,3)
+                    0, 1, 2, 2, 3, 0, // Back face (vertices 4,7,6,5) - note winding order
+                    4, 7, 6, 6, 5, 4, // Left face (vertices 4,0,3,7)
+                    4, 0, 3, 3, 7, 4, // Right face (vertices 1,5,6,2)
+                    1, 5, 6, 6, 2, 1, // Bottom face (vertices 4,5,1,0)
+                    4, 5, 1, 1, 0, 4, // Top face (vertices 3,2,6,7)
+                    3, 2, 6, 6, 7, 3,
+                ];
 
-        self.box_instances_buffer = Some(device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("highlight box instances"),
-                contents: bytemuck::cast_slice(&box_instances),
-                usage: BufferUsages::VERTEX,
-            },
-        ));
+                // Add vertices for each triangle in the solid box
+                for &index in &face_indices {
+                    all_box_vertices.push(vertices[index]);
+                }
 
-        self.wireframe_instances_buffer = Some(device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("highlight wireframe instances"),
-                contents: bytemuck::cast_slice(&wireframe_instances),
-                usage: BufferUsages::VERTEX,
-            },
-        ));
+                // Add edges for wireframe (same edge topology as before)
+                let edge_indices = [
+                    // Bottom face edges
+                    0, 1, 1, 2, 2, 3, 3, 0, // Top face edges
+                    4, 5, 5, 6, 6, 7, 7, 4, // Vertical edges
+                    0, 4, 1, 5, 2, 6, 3, 7,
+                ];
+
+                // Add vertices for each edge in the wireframe
+                for &index in &edge_indices {
+                    all_wireframe_vertices.push(wireframe_vertices[index]);
+                }
+            } else {
+                log::warn!(
+                    "Object {} has {} vertices, expected 8. Skipping.",
+                    obj.name,
+                    obj.aligned_bbox.len()
+                );
+            }
+        }
+
+        // Create buffers with exact vertex data
+        if !all_box_vertices.is_empty() {
+            self.box_vertex_count = all_box_vertices.len() as u32;
+            self.box_instances_buffer = Some(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("highlight box vertices"),
+                    contents: bytemuck::cast_slice(&all_box_vertices),
+                    usage: BufferUsages::VERTEX,
+                },
+            ));
+        } else {
+            self.box_vertex_count = 0;
+            self.box_instances_buffer = None;
+        }
+
+        if !all_wireframe_vertices.is_empty() {
+            self.wireframe_vertex_count = all_wireframe_vertices.len() as u32;
+            self.wireframe_instances_buffer = Some(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("highlight wireframe vertices"),
+                    contents: bytemuck::cast_slice(&all_wireframe_vertices),
+                    usage: BufferUsages::VERTEX,
+                },
+            ));
+        } else {
+            self.wireframe_vertex_count = 0;
+            self.wireframe_instances_buffer = None;
+        }
     }
 
     fn update_path_geometry(&mut self, device: &wgpu::Device) {
@@ -583,39 +535,24 @@ impl HighlightRenderer {
         render_pass: &mut wgpu::RenderPass<'rpass>,
         camera: &'rpass UniformBuffer<CameraUniform>,
     ) {
-        // Render solid semi-transparent bounding boxes first
-        if let (Some(vertex_buffer), Some(index_buffer), Some(instances_buffer)) = (
-            &self.box_vertex_buffer,
-            &self.box_index_buffer,
-            &self.box_instances_buffer,
-        ) {
-            render_pass.set_pipeline(&self.box_pipeline);
-            render_pass.set_bind_group(0, camera.bind_group(), &[]);
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, instances_buffer.slice(..));
-            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..36, 0, 0..self.highlighted_objects.len() as u32);
-            // 36 indices for solid cube (6 faces * 2 triangles * 3 vertices)
+        // Render solid semi-transparent bounding boxes first using exact vertices
+        if let Some(vertex_buffer) = &self.box_instances_buffer {
+            if self.box_vertex_count > 0 {
+                render_pass.set_pipeline(&self.box_pipeline);
+                render_pass.set_bind_group(0, camera.bind_group(), &[]);
+                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                render_pass.draw(0..self.box_vertex_count, 0..1);
+            }
         }
 
-        // Render wireframe edges on top for thicker edge definition
-        if let (
-            Some(wireframe_vertex_buffer),
-            Some(wireframe_index_buffer),
-            Some(instances_buffer),
-        ) = (
-            &self.wireframe_vertex_buffer,
-            &self.wireframe_index_buffer,
-            &self.wireframe_instances_buffer,
-        ) {
-            render_pass.set_pipeline(&self.wireframe_pipeline);
-            render_pass.set_bind_group(0, camera.bind_group(), &[]);
-            render_pass.set_vertex_buffer(0, wireframe_vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, instances_buffer.slice(..));
-            render_pass
-                .set_index_buffer(wireframe_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..24, 0, 0..self.highlighted_objects.len() as u32);
-            // 24 indices for wireframe edges
+        // Render wireframe edges on top using exact vertices
+        if let Some(wireframe_buffer) = &self.wireframe_instances_buffer {
+            if self.wireframe_vertex_count > 0 {
+                render_pass.set_pipeline(&self.wireframe_pipeline);
+                render_pass.set_bind_group(0, camera.bind_group(), &[]);
+                render_pass.set_vertex_buffer(0, wireframe_buffer.slice(..));
+                render_pass.draw(0..self.wireframe_vertex_count, 0..1);
+            }
         }
 
         // Render path
