@@ -582,7 +582,7 @@ impl WindowContext {
         path_cameras.push(start_camera);
         
         // Phase 1: Elegant transition to first waypoint
-        let first_waypoint = Point3::new(
+        let _first_waypoint = Point3::new(
             path.waypoints[0][0], 
             path.waypoints[0][1], 
             path.waypoints[0][2]
@@ -1281,8 +1281,7 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
 
 #[cfg(target_arch = "wasm32")]
 fn get_web_mcp_server_url() -> String {
-    use wasm_bindgen::prelude::*;
-    use web_sys::{window, Storage};
+    use web_sys::window;
     
     // Try to get URL from localStorage first
     if let Some(window) = window() {
@@ -1299,7 +1298,7 @@ fn get_web_mcp_server_url() -> String {
         if let Some(location) = window.location().href().ok() {
             if let Ok(url) = web_sys::Url::new(&location) {
                 let search_params = url.search_params();
-                if let Ok(Some(mcp_url)) = search_params.get("mcp_server_url") {
+                if let Some(mcp_url) = search_params.get("mcp_server_url") {
                     if !mcp_url.is_empty() {
                         log::info!("Using MCP server URL from URL parameter: {}", mcp_url);
                         return mcp_url;

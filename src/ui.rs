@@ -625,8 +625,6 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
         // Save to localStorage in WASM builds
         #[cfg(target_arch = "wasm32")]
         {
-            use wasm_bindgen::prelude::*;
-
             if let Some(window) = web_sys::window() {
                 if let Ok(Some(storage)) = window.local_storage() {
                     let _ = storage.set_item("mcp_server_url", &state.chat_state.mcp_server_url);
