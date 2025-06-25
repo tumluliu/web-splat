@@ -618,32 +618,39 @@ impl HighlightRenderer {
                 // 0: bottom back left,  1: bottom back right,  2: bottom front right, 3: bottom front left
                 // 4: top back left,     5: top back right,     6: top front right,    7: top front left
 
-                // Calculate centers of front and back faces to get reliable forward direction
-                let front_face_center =
-                    (bbox_points[2] + bbox_points[3] + bbox_points[6] + bbox_points[7]) / 4.0;
-                // front face: 2=bottom front right, 3=bottom front left, 6=top front right, 7=top front left
-
-                let back_face_center =
-                    (bbox_points[0] + bbox_points[1] + bbox_points[4] + bbox_points[5]) / 4.0;
-                // back face: 0=bottom back left, 1=bottom back right, 4=top back left, 5=top back right
-
-                // Forward direction is from back face center to front face center (pointing outward from front face)
-                let forward_dir = (front_face_center - back_face_center).normalize();
-
-                // Calculate object dimensions for appropriate camera distance
+                // Calculate object dimensions first
                 let width = (bbox_points[2] - bbox_points[3]).magnitude(); // front face width (front right - front left)
-                let depth = (front_face_center - back_face_center).magnitude(); // object depth (front to back distance)
                 let height = (bbox_points[7] - bbox_points[3]).magnitude(); // object height (top front left - bottom front left)
+                let depth = (bbox_points[0] - bbox_points[3]).magnitude(); // depth (back left - front left)
                 let max_dimension = width.max(depth).max(height);
 
-                // Position camera in front of the object at a proper distance and height
-                let camera_distance = max_dimension * 2.8; // Good viewing distance
-                let height_offset = height * 0.4; // Position camera above object center for better angle
+                // Calculate centers of front and back faces
+                let front_face_center =
+                    (bbox_points[2] + bbox_points[3] + bbox_points[6] + bbox_points[7]) / 4.0;
+                let back_face_center =
+                    (bbox_points[0] + bbox_points[1] + bbox_points[4] + bbox_points[5]) / 4.0;
 
-                // Start from object center, move toward front face, then forward by camera distance, then up by height offset
+                // The "outward normal" from front face - this is where camera should be positioned
+                // Calculate it more reliably using cross product of front face edges
+                let front_horizontal = bbox_points[2] - bbox_points[3]; // front right - front left
+                let front_vertical = bbox_points[7] - bbox_points[3]; // top front left - bottom front left
+                let front_normal = front_horizontal.cross(front_vertical).normalize();
+
+                // Make sure normal points outward (away from object center)
+                let to_center = center - front_face_center;
+                let outward_normal = if front_normal.dot(to_center) > 0.0 {
+                    -front_normal // flip if pointing inward
+                } else {
+                    front_normal
+                };
+
+                // Position camera at a proper distance from the front face center
+                let camera_distance = max_dimension * 8.0; // Much larger distance for proper view
+                let height_offset = height * 0.5; // Position camera above object for better angle
+
                 let camera_position = Point3::from_vec(
-                    center
-                        + forward_dir * (depth * 0.5 + camera_distance)
+                    front_face_center
+                        + outward_normal * camera_distance
                         + Vector3::new(0.0, height_offset, 0.0),
                 );
 
@@ -667,10 +674,10 @@ impl HighlightRenderer {
                     back_face_center.z
                 );
                 log::info!(
-                    "  Forward dir: ({:.3}, {:.3}, {:.3})",
-                    forward_dir.x,
-                    forward_dir.y,
-                    forward_dir.z
+                    "  Outward normal: ({:.3}, {:.3}, {:.3})",
+                    outward_normal.x,
+                    outward_normal.y,
+                    outward_normal.z
                 );
                 log::info!(
                     "  Dimensions: W={:.3}, D={:.3}, H={:.3}",
