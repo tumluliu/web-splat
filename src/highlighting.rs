@@ -644,15 +644,18 @@ impl HighlightRenderer {
                     front_normal
                 };
 
-                // Position camera at a proper distance from the front face center
-                let camera_distance = max_dimension * 8.0; // Much larger distance for proper view
-                let height_offset = height * 0.5; // Position camera above object for better angle
+                // Based on user feedback - good position was:
+                // Object: (19.101, 5.089, 4.355), Camera: (9.115, 6.411, -5.250)
+                // This shows camera offset: (-9.986, 1.322, -9.605) = roughly 14 units away
+                // The pattern suggests: back-left-and-down from object, slightly above object level
 
-                let camera_position = Point3::from_vec(
-                    front_face_center
-                        + outward_normal * camera_distance
-                        + Vector3::new(0.0, height_offset, 0.0),
-                );
+                let total_distance = max_dimension * 15.0; // Large distance for good overview
+
+                // Create a better default viewing direction: front-left-above
+                // This mimics typical 3D viewing angles that work well
+                let view_direction = Vector3::new(-0.6, 0.2, -0.77).normalize(); // front-left-above direction
+
+                let camera_position = Point3::from_vec(center + view_direction * total_distance);
 
                 log::info!("Object viewing analysis:");
                 log::info!(
@@ -685,8 +688,13 @@ impl HighlightRenderer {
                     depth,
                     height
                 );
-                log::info!("  Camera distance: {:.3}", camera_distance);
-                log::info!("  Height offset: {:.3}", height_offset);
+                log::info!("  Total distance: {:.3}", total_distance);
+                log::info!(
+                    "  View direction: ({:.3}, {:.3}, {:.3})",
+                    view_direction.x,
+                    view_direction.y,
+                    view_direction.z
+                );
                 log::info!(
                     "  Camera position: ({:.3}, {:.3}, {:.3})",
                     camera_position.x,
