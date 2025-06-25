@@ -411,37 +411,53 @@ impl WindowContext {
         {
             log::info!("WASM build: making HTTP request");
             
-            // Make async HTTP request and handle response when it completes
+            // Store a reference to the pending responses that we can update from the async closure
+            // We'll use a polling approach - the async task will store the response in a static location
+            // and the main update loop will check for it
+            
             let msg_clone = message.clone();
             let server_url_clone = server_url.clone();
             
-            // Use a shared state approach to handle the async response
-            // For now, we'll make the request and see if it works
+            // Create a unique identifier for this request
+            let request_id = format!("{}_{}", message.len(), chrono::Utc::now().timestamp_millis());
+            
+            // Store the request ID so we can match it with the response later
+            self.chat_state.pending_request_id = Some(request_id.clone());
+            
             wasm_bindgen_futures::spawn_local(async move {
                 log::info!("Starting WASM HTTP request...");
-                match crate::chat::send_chat_message(msg_clone, &server_url_clone).await {
+                match crate::chat::send_chat_message(msg_clone.clone(), &server_url_clone).await {
                     Ok(response) => {
-                        log::info!("WASM HTTP request successful! Response: {:?}", response);
-                        // TODO: Find a way to update the UI with this response
-                        // For now just log it to confirm the HTTP request works
+                        log::info!("WASM HTTP request successful!");
+                        // Store the response in a global location that the main thread can access
+                        crate::chat::store_async_response(request_id, msg_clone, response);
                     }
                     Err(e) => {
-                        log::warn!("WASM HTTP request failed: {}", e);
+                        log::warn!("WASM HTTP request failed: {}, using fallback", e);
+                        // Store a fallback response
+                        let fallback = ui::create_mock_response(&msg_clone);
+                        crate::chat::store_async_response(request_id, msg_clone, fallback);
                     }
                 }
             });
-            
-            // For demo purposes, also show a mock response immediately
-            // The real response will show in the logs to prove HTTP works
-            log::info!("WASM build: showing immediate mock response (check logs for real HTTP response)");
-            let response = ui::create_mock_response(&message);
-            self.pending_chat_responses.push((message, response));
         }
         
         log::info!("Response queued for processing");
     }
 
     fn process_pending_chat_responses(&mut self) {
+        // Check for async responses in WASM
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(request_id) = &self.chat_state.pending_request_id.clone() {
+                if let Some((message, response)) = crate::chat::check_async_response(request_id) {
+                    log::info!("Found async response, processing it");
+                    self.chat_state.pending_request_id = None;
+                    self.pending_chat_responses.push((message, response));
+                }
+            }
+        }
+        
         if !self.pending_chat_responses.is_empty() {
             let responses = std::mem::take(&mut self.pending_chat_responses);
             for (_, response) in responses {

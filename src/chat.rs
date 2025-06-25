@@ -40,6 +40,8 @@ pub struct ChatState {
     pub highlighted_objects: Vec<SceneObject>,
     pub highlighted_path: Option<ScenePath>,
     pub mcp_server_url: String,
+    #[cfg(target_arch = "wasm32")]
+    pub pending_request_id: Option<String>,
 }
 
 impl Default for ChatState {
@@ -51,6 +53,8 @@ impl Default for ChatState {
             highlighted_objects: Vec::new(),
             highlighted_path: None,
             mcp_server_url: "http://localhost:8080".to_string(),
+            #[cfg(target_arch = "wasm32")]
+            pending_request_id: None,
         }
     }
 }
@@ -229,5 +233,41 @@ pub async fn send_chat_message(
 
         log::warn!("❌ Server error: {} - {}", resp.status(), error_text);
         Ok(McpResponse { answer: Vec::new() })
+    }
+}
+
+// Global storage for async responses in WASM
+#[cfg(target_arch = "wasm32")]
+use std::collections::HashMap;
+#[cfg(target_arch = "wasm32")]
+use std::sync::Mutex;
+
+#[cfg(target_arch = "wasm32")]
+lazy_static::lazy_static! {
+    static ref ASYNC_RESPONSES: Mutex<HashMap<String, (String, McpResponse)>> = Mutex::new(HashMap::new());
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn store_async_response(request_id: String, message: String, response: McpResponse) {
+    log::info!("Storing async response for request_id: {}", request_id);
+    if let Ok(mut responses) = ASYNC_RESPONSES.lock() {
+        responses.insert(request_id, (message, response));
+        log::info!("Successfully stored async response");
+    } else {
+        log::error!("Failed to acquire lock for async responses");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn check_async_response(request_id: &str) -> Option<(String, McpResponse)> {
+    if let Ok(mut responses) = ASYNC_RESPONSES.lock() {
+        let result = responses.remove(request_id);
+        if result.is_some() {
+            log::info!("Retrieved async response for request_id: {}", request_id);
+        }
+        result
+    } else {
+        log::error!("Failed to acquire lock for async responses");
+        None
     }
 }
