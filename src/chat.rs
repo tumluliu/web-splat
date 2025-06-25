@@ -125,7 +125,7 @@ pub async fn send_chat_message(
         let response_text = response.text().await?;
         log::info!("📝 Raw response: {}", response_text);
 
-        let mcp_response: McpResponse = serde_json::from_str(&response_text)?;
+        let mcp_response = parse_mcp_response(&response_text)?;
         log::info!("✅ Successfully parsed MCP response");
         Ok(mcp_response)
     } else {
@@ -214,7 +214,7 @@ pub async fn send_chat_message(
 
         log::info!("📝 Raw response: {}", response_text);
 
-        let mcp_response: McpResponse = serde_json::from_str(&response_text)
+        let mcp_response = parse_mcp_response(&response_text)
             .map_err(|e| format!("Failed to parse JSON response: {}", e))?;
 
         log::info!("✅ Successfully parsed MCP response");
@@ -234,6 +234,44 @@ pub async fn send_chat_message(
         log::warn!("❌ Server error: {} - {}", resp.status(), error_text);
         Ok(McpResponse { answer: Vec::new() })
     }
+}
+
+/// Helper function to parse MCP response that handles both direct JSON array and double-encoded string formats
+fn parse_mcp_response(
+    response_text: &str,
+) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
+    #[derive(Debug, Clone, Deserialize)]
+    struct RawMcpResponse {
+        answer: serde_json::Value,
+    }
+
+    // First, parse the outer JSON structure
+    let raw_response: RawMcpResponse = serde_json::from_str(response_text)?;
+    log::info!("Raw answer value: {:?}", raw_response.answer);
+
+    let answer = match raw_response.answer {
+        // Case 1: answer is already a JSON array
+        serde_json::Value::Array(arr) => {
+            log::info!("Answer is direct JSON array with {} items", arr.len());
+            serde_json::from_value::<Vec<SceneObject>>(serde_json::Value::Array(arr))?
+        }
+        // Case 2: answer is a JSON string that needs to be parsed again
+        serde_json::Value::String(json_string) => {
+            log::info!("Answer is JSON string, parsing it: {}", json_string);
+            serde_json::from_str::<Vec<SceneObject>>(&json_string)?
+        }
+        // Case 3: Unexpected format
+        other => {
+            log::warn!("Unexpected answer format: {:?}", other);
+            return Ok(McpResponse { answer: Vec::new() });
+        }
+    };
+
+    log::info!(
+        "Successfully parsed {} objects from MCP response",
+        answer.len()
+    );
+    Ok(McpResponse { answer })
 }
 
 // Global storage for async responses in WASM
