@@ -389,6 +389,62 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
                             ui.end_row();
                         }
                     });
+
+                ui.separator();
+
+                // Debug Actions
+                ui.heading("Debug Actions");
+                if ui
+                    .button("📍 Log Camera Position & Look Direction")
+                    .clicked()
+                {
+                    let camera = &state.splatting_args.camera;
+                    let camera_pos = camera.position;
+                    let camera_rot = camera.rotation;
+
+                    // Calculate look direction from camera rotation
+                    let rotation_matrix: cgmath::Matrix3<f32> = camera_rot.into();
+                    let look_direction = rotation_matrix * cgmath::Vector3::new(0.0, 0.0, 1.0); // Forward is +Z in camera space
+
+                    log::info!("🐛 CAMERA DEBUG INFO:");
+                    log::info!(
+                        "  📍 Camera Position: ({:.3}, {:.3}, {:.3})",
+                        camera_pos.x,
+                        camera_pos.y,
+                        camera_pos.z
+                    );
+                    log::info!(
+                        "  👁️  Look Direction: ({:.3}, {:.3}, {:.3})",
+                        look_direction.x,
+                        look_direction.y,
+                        look_direction.z
+                    );
+                    log::info!(
+                        "  🎯 View Center: ({:.3}, {:.3}, {:.3})",
+                        state.controller.center.x,
+                        state.controller.center.y,
+                        state.controller.center.z
+                    );
+
+                    // Also log Euler angles for reference
+                    let euler: cgmath::Euler<cgmath::Rad<f32>> = cgmath::Euler::from(camera_rot);
+                    let euler_degrees = cgmath::Euler::new(
+                        cgmath::Deg::from(euler.x),
+                        cgmath::Deg::from(euler.y),
+                        cgmath::Deg::from(euler.z),
+                    );
+                    log::info!(
+                        "  🔄 Rotation (deg): ({:.1}°, {:.1}°, {:.1}°)",
+                        euler_degrees.x.0,
+                        euler_degrees.y.0,
+                        euler_degrees.z.0
+                    );
+                    log::info!(
+                        "  📐 FOV: ({:.1}°, {:.1}°)",
+                        cgmath::Deg::from(camera.projection.fovx).0,
+                        cgmath::Deg::from(camera.projection.fovy).0
+                    );
+                }
             });
         });
 
