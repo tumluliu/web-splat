@@ -819,233 +819,54 @@ pub fn chat_ui(state: &WindowContext, ctx: &egui::Context) -> (Option<String>, S
 }
 
 /// Create mock response for testing - replace with real async handling
-pub fn create_mock_response(message: &str) -> McpResponse {
+pub fn create_mock_response(_message: &str) -> McpResponse {
+    // Simple fallback mock response with coffee machine example
     use std::collections::HashMap;
 
-    // Create mock response based on the message content with realistic scene coordinates
-    if message.to_lowercase().contains("table") {
-        let mut attributes = HashMap::new();
-        attributes.insert("type".to_string(), "dining_table".to_string());
-        attributes.insert("material".to_string(), "wood".to_string());
-        attributes.insert("size".to_string(), "large".to_string());
-        attributes.insert("width".to_string(), "2.0".to_string()); // More reasonable size
-        attributes.insert("height".to_string(), "1.0".to_string()); // More reasonable size
-        attributes.insert("depth".to_string(), "1.5".to_string()); // More reasonable size
+    let mut attributes = HashMap::new();
+    attributes.insert("type".to_string(), "appliance".to_string());
+    attributes.insert("subtype".to_string(), "coffee_machine".to_string());
 
-        let object = crate::chat::SceneObject {
-            name: "Dining Table".to_string(),
-            position: [0.0, 4.0, -0.8], // Same level as chairs, on the floor
-            attributes,
-            confidence: Some(0.95),
-        };
+    let aligned_bbox = vec![
+        [16.479, 3.131, 6.617],
+        [19.776, 2.692, 7.687],
+        [20.852, 5.090, 5.355],
+        [17.555, 5.529, 4.285],
+        [16.952, 0.421, 4.049],
+        [20.249, -0.017, 5.119],
+        [21.325, 2.380, 2.787],
+        [18.028, 2.819, 1.717],
+    ];
 
-        McpResponse::Objects {
-            objects: vec![object],
-            description: Some(
-                "Found a large wooden dining table in the center of the room".to_string(),
-            ),
-        }
-    } else if message.to_lowercase().contains("chair") {
-        let mut attributes = HashMap::new();
-        attributes.insert("type".to_string(), "chair".to_string());
-        attributes.insert("material".to_string(), "wood".to_string());
-        attributes.insert("width".to_string(), "0.6".to_string());
-        attributes.insert("height".to_string(), "1.0".to_string());
-        attributes.insert("depth".to_string(), "0.6".to_string());
+    let object = crate::chat::SceneObject {
+        name: "Coffee Machine".to_string(),
+        aligned_bbox,
+        attributes: Some(attributes),
+    };
 
-        let objects = vec![
-            crate::chat::SceneObject {
-                name: "Chair 1".to_string(),
-                position: [-0.8, 4.0, -0.5], // Near camera level to test
-                attributes: attributes.clone(),
-                confidence: Some(0.90),
-            },
-            crate::chat::SceneObject {
-                name: "Chair 2".to_string(),
-                position: [0.8, 4.0, -0.5], // Near camera level to test
-                attributes: attributes.clone(),
-                confidence: Some(0.85),
-            },
-            crate::chat::SceneObject {
-                name: "Chair 3".to_string(),
-                position: [0.0, 4.0, -1.0], // Near camera level to test
-                attributes,
-                confidence: Some(0.88),
-            },
-        ];
-
-        McpResponse::Objects {
-            objects,
-            description: Some("Found 3 wooden chairs around the dining table".to_string()),
-        }
-    } else if message.to_lowercase().contains("lamp") || message.to_lowercase().contains("light") {
-        let mut attributes = HashMap::new();
-        attributes.insert("type".to_string(), "table_lamp".to_string());
-        attributes.insert("material".to_string(), "metal_fabric".to_string());
-        attributes.insert("width".to_string(), "0.3".to_string());
-        attributes.insert("height".to_string(), "0.6".to_string());
-        attributes.insert("depth".to_string(), "0.3".to_string());
-
-        let object = crate::chat::SceneObject {
-            name: "Table Lamp".to_string(),
-            position: [2.0, 4.5, -2.0], // On a side table, slightly above floor level
-            attributes,
-            confidence: Some(0.92),
-        };
-
-        McpResponse::Objects {
-            objects: vec![object],
-            description: Some("Found a table lamp in the corner of the room".to_string()),
-        }
-    } else if message.to_lowercase().contains("path")
-        || message.to_lowercase().contains("navigate")
-        || message.to_lowercase().contains("walk")
-    {
-        let path = crate::chat::ScenePath {
-            waypoints: vec![
-                [-2.0, 4.1, -3.0], // Start near entrance
-                [-1.8, 4.1, -2.8], // Smooth curve point 1
-                [-1.5, 4.1, -2.5], // Smooth curve point 2
-                [-1.0, 4.1, -2.3], // Smooth curve point 3
-                [-0.5, 4.1, -2.1], // Approach center
-                [0.0, 4.1, -2.0],  // Center approach
-                [0.2, 4.1, -1.9],  // Fine adjustment 1
-                [0.4, 4.1, -1.8],  // Fine adjustment 2
-                [0.6, 4.1, -1.7],  // Table approach
-                [0.8, 4.1, -1.6],  // Near table
-                [1.0, 4.1, -1.5],  // Table vicinity
-                [1.2, 4.1, -1.4],  // Move around table
-                [1.4, 4.1, -1.3],  // Continue around
-                [1.6, 4.1, -1.2],  // Chair area approach
-                [1.8, 4.1, -1.1],  // Near chairs
-                [2.0, 4.1, -1.0],  // End at seating area
-            ],
-            description: Some("Smooth navigation path from entrance to seating area".to_string()),
-        };
-
-        McpResponse::Path {
-            path,
-            description: Some("Calculated smooth walking path through the room".to_string()),
-        }
-    } else if message.to_lowercase().contains("kitchen") {
-        let path = crate::chat::ScenePath {
-            waypoints: vec![
-                [0.0, 4.1, -2.0], // Start at table
-                [0.3, 4.1, -2.2], // Move slightly back
-                [0.6, 4.1, -2.5], // Continue towards back
-                [0.9, 4.1, -2.8], // Smooth curve
-                [1.2, 4.1, -3.0], // Continue back
-                [1.5, 4.1, -3.2], // Approach kitchen area
-                [1.8, 4.1, -3.4], // Near kitchen
-                [2.0, 4.1, -3.5], // Kitchen approach
-                [2.2, 4.1, -3.7], // Final approach
-                [2.5, 4.1, -4.0], // Reach kitchen
-            ],
-            description: Some("Smooth path to kitchen area".to_string()),
-        };
-
-        McpResponse::Path {
-            path,
-            description: Some("Smooth path from dining area to kitchen".to_string()),
-        }
-    } else if message.to_lowercase().contains("sofa") || message.to_lowercase().contains("couch") {
-        let mut attributes = HashMap::new();
-        attributes.insert("type".to_string(), "sofa".to_string());
-        attributes.insert("material".to_string(), "fabric".to_string());
-        attributes.insert("color".to_string(), "beige".to_string());
-        attributes.insert("width".to_string(), "2.0".to_string());
-        attributes.insert("height".to_string(), "0.8".to_string());
-        attributes.insert("depth".to_string(), "0.9".to_string());
-
-        let object = crate::chat::SceneObject {
-            name: "Living Room Sofa".to_string(),
-            position: [-1.5, 4.0, 0.5], // Living area, same level as chairs
-            attributes,
-            confidence: Some(0.93),
-        };
-
-        McpResponse::Objects {
-            objects: vec![object],
-            description: Some("Found a comfortable sofa in the living area".to_string()),
-        }
-    } else if message.to_lowercase().contains("coffee")
-        || message.to_lowercase().contains("espresso")
-        || message.to_lowercase().contains("brew")
-    {
-        let mut attributes = HashMap::new();
-        attributes.insert("type".to_string(), "appliance".to_string());
-        attributes.insert("subtype".to_string(), "coffee_machine".to_string());
-        attributes.insert("material".to_string(), "stainless_steel".to_string());
-        attributes.insert("size".to_string(), "medium".to_string());
-        attributes.insert("color".to_string(), "black".to_string());
-        attributes.insert("width".to_string(), "6.634".to_string());
-        attributes.insert("height".to_string(), "6.785".to_string());
-        attributes.insert("depth".to_string(), "5.602".to_string());
-        attributes.insert("brand".to_string(), "premium".to_string());
-        attributes.insert("function".to_string(), "brewing".to_string());
-
-        let object = crate::chat::SceneObject {
-            name: "Coffee Machine".to_string(),
-            position: [18.610, 2.469, 4.476], // Exact position from calculated vertices
-            attributes,
-            confidence: Some(0.94),
-        };
-
-        // Check if this is a navigation query to coffee machine
-        if message.to_lowercase().contains("navigate")
-            || message.to_lowercase().contains("path")
-            || message.to_lowercase().contains("go")
-        {
-            let path = crate::chat::ScenePath {
-                waypoints: vec![
-                    [2.5, 4.1, 1.0],        // Start at dining table
-                    [7.0, 4.1, 2.0],        // Midpoint 1
-                    [12.0, 3.5, 3.0],       // Midpoint 2
-                    [16.0, 3.0, 4.0],       // Approaching coffee area
-                    [18.610, 2.469, 4.476], // Coffee machine
-                ],
-                description: Some("Smooth path from dining area to coffee machine".to_string()),
-            };
-
-            McpResponse::Path {
-                path,
-                description: Some("Calculated path to the premium coffee machine".to_string()),
-            }
-        } else {
-            McpResponse::Objects {
-                objects: vec![object],
-                description: Some("Found a premium stainless steel coffee machine".to_string()),
-            }
-        }
-    } else {
-        McpResponse::Error {
-            message: "I can help you find objects like tables, chairs, lamps, sofas, coffee machines, or navigate between locations. Try asking 'Where is the coffee machine?' or 'Show me a path to the coffee machine'".to_string(),
-        }
+    McpResponse {
+        answer: vec![object],
     }
 }
 
 /// Format MCP response for display
 pub fn format_response(response: &McpResponse) -> String {
-    match response {
-        McpResponse::Objects {
-            objects,
-            description,
-        } => {
-            let desc = description.as_deref().unwrap_or("Found objects");
-            format!(
-                "{}: {}",
-                desc,
-                objects
-                    .iter()
-                    .map(|o| o.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
-        McpResponse::Path { description, .. } => description
-            .as_deref()
-            .unwrap_or("Path calculated")
-            .to_string(),
-        McpResponse::Error { message } => message.clone(),
+    if response.answer.is_empty() {
+        "No objects found".to_string()
+    } else {
+        format!(
+            "Found {}: {}",
+            if response.answer.len() == 1 {
+                "object"
+            } else {
+                "objects"
+            },
+            response
+                .answer
+                .iter()
+                .map(|o| o.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }

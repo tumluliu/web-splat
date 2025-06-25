@@ -16,9 +16,9 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SceneObject {
     pub name: String,
-    pub position: [f32; 3],
-    pub attributes: std::collections::HashMap<String, String>,
-    pub confidence: Option<f32>,
+    pub aligned_bbox: Vec<[f32; 3]>, // 8 3D points representing the aligned bounding box
+    #[serde(default)]
+    pub attributes: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -28,20 +28,8 @@ pub struct ScenePath {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "type")]
-pub enum McpResponse {
-    #[serde(rename = "objects")]
-    Objects {
-        objects: Vec<SceneObject>,
-        description: Option<String>,
-    },
-    #[serde(rename = "path")]
-    Path {
-        path: ScenePath,
-        description: Option<String>,
-    },
-    #[serde(rename = "error")]
-    Error { message: String },
+pub struct McpResponse {
+    pub answer: Vec<SceneObject>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,17 +78,7 @@ impl ChatState {
 
     pub fn set_highlights(&mut self, response: McpResponse) {
         self.clear_highlights();
-        match response {
-            McpResponse::Objects { objects, .. } => {
-                self.highlighted_objects = objects;
-            }
-            McpResponse::Path { path, .. } => {
-                self.highlighted_path = Some(path);
-            }
-            McpResponse::Error { .. } => {
-                // No highlights for errors
-            }
-        }
+        self.highlighted_objects = response.answer;
     }
 }
 
@@ -116,7 +94,7 @@ pub async fn send_chat_message(
     let client = reqwest::Client::new();
 
     let request_body = serde_json::json!({
-        "query": message,
+        "prompt": message,
         "context": "3d_scene_understanding"
     });
 
@@ -152,9 +130,7 @@ pub async fn send_chat_message(
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
         log::warn!("❌ Server error: {} - {}", status, error_text);
-        Ok(McpResponse::Error {
-            message: format!("Server returned status: {} - {}", status, error_text),
-        })
+        Ok(McpResponse { answer: Vec::new() })
     }
 }
 
@@ -172,7 +148,7 @@ pub async fn send_chat_message(
     log::info!("💬 Message: {}", message);
 
     let request_body = serde_json::json!({
-        "query": message,
+        "prompt": message,
         "context": "3d_scene_understanding"
     });
 
@@ -252,8 +228,6 @@ pub async fn send_chat_message(
         };
 
         log::warn!("❌ Server error: {} - {}", resp.status(), error_text);
-        Ok(McpResponse::Error {
-            message: format!("Server returned status: {} - {}", resp.status(), error_text),
-        })
+        Ok(McpResponse { answer: Vec::new() })
     }
 }

@@ -428,25 +428,62 @@ impl HighlightRenderer {
             .iter()
             .enumerate()
             .map(|(i, obj)| {
-                let position = Point3::new(obj.position[0], obj.position[1], obj.position[2]);
+                // Calculate bounding box center and size from aligned_bbox points
+                let (position, width, height, depth) = if obj.aligned_bbox.len() >= 8 {
+                    // Calculate center from all 8 points
+                    let mut center = [0.0, 0.0, 0.0];
+                    for point in &obj.aligned_bbox {
+                        center[0] += point[0];
+                        center[1] += point[1];
+                        center[2] += point[2];
+                    }
+                    center[0] /= 8.0;
+                    center[1] /= 8.0;
+                    center[2] /= 8.0;
 
-                // Get bounding box size from attributes or use defaults
-                // Use very large default sizes to make bounding boxes highly visible
-                let width = obj
-                    .attributes
-                    .get("width")
-                    .and_then(|w| w.parse::<f32>().ok())
-                    .unwrap_or(5.0); // Very large for visibility
-                let height = obj
-                    .attributes
-                    .get("height")
-                    .and_then(|h| h.parse::<f32>().ok())
-                    .unwrap_or(3.0); // Very large for visibility
-                let depth = obj
-                    .attributes
-                    .get("depth")
-                    .and_then(|d| d.parse::<f32>().ok())
-                    .unwrap_or(5.0); // Very large for visibility
+                    // Calculate size from min/max points
+                    let mut min_point = obj.aligned_bbox[0];
+                    let mut max_point = obj.aligned_bbox[0];
+                    for point in &obj.aligned_bbox {
+                        for i in 0..3 {
+                            min_point[i] = min_point[i].min(point[i]);
+                            max_point[i] = max_point[i].max(point[i]);
+                        }
+                    }
+
+                    let width = max_point[0] - min_point[0];
+                    let height = max_point[1] - min_point[1];
+                    let depth = max_point[2] - min_point[2];
+
+                    (
+                        Point3::new(center[0], center[1], center[2]),
+                        width,
+                        height,
+                        depth,
+                    )
+                } else {
+                    // Fallback: use attributes if available, or defaults
+                    let width = obj
+                        .attributes
+                        .as_ref()
+                        .and_then(|attrs| attrs.get("width"))
+                        .and_then(|w| w.parse::<f32>().ok())
+                        .unwrap_or(5.0);
+                    let height = obj
+                        .attributes
+                        .as_ref()
+                        .and_then(|attrs| attrs.get("height"))
+                        .and_then(|h| h.parse::<f32>().ok())
+                        .unwrap_or(3.0);
+                    let depth = obj
+                        .attributes
+                        .as_ref()
+                        .and_then(|attrs| attrs.get("depth"))
+                        .and_then(|d| d.parse::<f32>().ok())
+                        .unwrap_or(5.0);
+
+                    (Point3::new(0.0, 0.0, 0.0), width, height, depth)
+                };
 
                 // Create transformation matrix
                 let scale_matrix = Matrix4::from_nonuniform_scale(width, height, depth);
@@ -593,9 +630,23 @@ impl HighlightRenderer {
     }
 
     pub fn get_first_object_position(&self) -> Option<Point3<f32>> {
-        self.highlighted_objects
-            .first()
-            .map(|obj| Point3::new(obj.position[0], obj.position[1], obj.position[2]))
+        self.highlighted_objects.first().map(|obj| {
+            if obj.aligned_bbox.len() >= 8 {
+                // Calculate center from all 8 points
+                let mut center = [0.0, 0.0, 0.0];
+                for point in &obj.aligned_bbox {
+                    center[0] += point[0];
+                    center[1] += point[1];
+                    center[2] += point[2];
+                }
+                center[0] /= 8.0;
+                center[1] /= 8.0;
+                center[2] /= 8.0;
+                Point3::new(center[0], center[1], center[2])
+            } else {
+                Point3::new(0.0, 0.0, 0.0)
+            }
+        })
     }
 
     pub fn get_path_start_position(&self) -> Option<Point3<f32>> {

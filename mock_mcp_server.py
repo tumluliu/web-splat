@@ -299,46 +299,78 @@ def handle_query():
     try:
         print("🔄 Attempting to parse JSON...")
         data = request.json
-        query = data.get("query", "")
+        prompt = data.get("prompt", "")
         context = data.get("context", "")
 
         print(f"✅ JSON PARSED SUCCESSFULLY!")
-        print(f"💬 Query: '{query}'")
+        print(f"💬 Prompt: '{prompt}'")
         print(f"🔍 Context: '{context}'")
 
-        # Determine response type based on query
-        if any(
-            word in query.lower()
-            for word in ["path", "navigate", "go", "route", "walk", "how to get"]
-        ):
-            # Return path response
-            path = find_path_by_query(query)
-            response = {
-                "type": "path",
-                "path": path,
-                "description": f"Navigation path: {path['description']}",
-            }
-        else:
-            # Return objects response
-            objects = find_objects_by_query(query)
+        # Find objects based on the prompt
+        objects = find_objects_by_query(prompt)
 
-            if objects:
-                description = f"Found {len(objects)} object(s)"
-                if "biggest" in query.lower() or "largest" in query.lower():
-                    description = "Found the largest matching object(s)"
-                elif "smallest" in query.lower():
-                    description = "Found the smallest matching object(s)"
+        # Convert objects to new format with aligned_bbox
+        answer_objects = []
+        for obj in objects:
+            # Generate aligned bounding box from position and size
+            pos = obj["position"]
+            width = float(obj["attributes"].get("width", "2.0"))
+            height = float(obj["attributes"].get("height", "2.0"))
+            depth = float(obj["attributes"].get("depth", "2.0"))
 
-                response = {
-                    "type": "objects",
-                    "objects": objects,
-                    "description": description,
+            # Create 8 corners of the bounding box
+            aligned_bbox = [
+                [
+                    pos[0] - width / 2,
+                    pos[1] - height / 2,
+                    pos[2] - depth / 2,
+                ],  # Bottom-front-left
+                [
+                    pos[0] + width / 2,
+                    pos[1] - height / 2,
+                    pos[2] - depth / 2,
+                ],  # Bottom-front-right
+                [
+                    pos[0] + width / 2,
+                    pos[1] + height / 2,
+                    pos[2] - depth / 2,
+                ],  # Top-front-right
+                [
+                    pos[0] - width / 2,
+                    pos[1] + height / 2,
+                    pos[2] - depth / 2,
+                ],  # Top-front-left
+                [
+                    pos[0] - width / 2,
+                    pos[1] - height / 2,
+                    pos[2] + depth / 2,
+                ],  # Bottom-back-left
+                [
+                    pos[0] + width / 2,
+                    pos[1] - height / 2,
+                    pos[2] + depth / 2,
+                ],  # Bottom-back-right
+                [
+                    pos[0] + width / 2,
+                    pos[1] + height / 2,
+                    pos[2] + depth / 2,
+                ],  # Top-back-right
+                [
+                    pos[0] - width / 2,
+                    pos[1] + height / 2,
+                    pos[2] + depth / 2,
+                ],  # Top-back-left
+            ]
+
+            answer_objects.append(
+                {
+                    "name": obj["name"],
+                    "aligned_bbox": aligned_bbox,
+                    "attributes": obj.get("attributes"),
                 }
-            else:
-                response = {
-                    "type": "error",
-                    "message": "I couldn't find any objects matching your query. Try asking about tables, chairs, kitchen items, or navigation paths.",
-                }
+            )
+
+        response = {"answer": answer_objects}
 
         print(f"✅ Sending response: {json.dumps(response, indent=2)}")
         print(f"🔴 REQUEST COMPLETE\n")
@@ -347,7 +379,7 @@ def handle_query():
     except Exception as e:
         print(f"❌ Error processing query: {e}")
         print(f"🔴 REQUEST FAILED\n")
-        return jsonify({"type": "error", "message": f"Server error: {str(e)}"}), 500
+        return jsonify({"answer": []}), 500
 
 
 @app.route("/health", methods=["GET"])

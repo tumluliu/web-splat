@@ -453,39 +453,40 @@ impl WindowContext {
     }
 
     fn update_highlights_and_animate(&mut self, response: McpResponse) {
-        match response {
-            McpResponse::Objects { objects, .. } => {
-                // Log current camera position for debugging
-                let camera_pos = self.splatting_args.camera.position;
-                log::info!("Camera position: ({:.3}, {:.3}, {:.3})", camera_pos.x, camera_pos.y, camera_pos.z);
-                
-                // Log object positions for debugging
-                for (i, obj) in objects.iter().enumerate() {
-                    log::info!("Object {}: {} at position ({:.3}, {:.3}, {:.3})", 
-                        i + 1, obj.name, obj.position[0], obj.position[1], obj.position[2]);
+        // Log current camera position for debugging
+        let camera_pos = self.splatting_args.camera.position;
+        log::info!("Camera position: ({:.3}, {:.3}, {:.3})", camera_pos.x, camera_pos.y, camera_pos.z);
+        
+        if !response.answer.is_empty() {
+            // Log object bounding boxes for debugging
+            for (i, obj) in response.answer.iter().enumerate() {
+                if obj.aligned_bbox.len() >= 8 {
+                    // Calculate center from bounding box
+                    let mut center = [0.0, 0.0, 0.0];
+                    for point in &obj.aligned_bbox {
+                        center[0] += point[0];
+                        center[1] += point[1];
+                        center[2] += point[2];
+                    }
+                    center[0] /= 8.0;
+                    center[1] /= 8.0;
+                    center[2] /= 8.0;
+                    log::info!("Object {}: {} at center ({:.3}, {:.3}, {:.3})", 
+                        i + 1, obj.name, center[0], center[1], center[2]);
                 }
-                
-                // Update highlighting renderer
-                self.highlight_renderer.set_highlighted_objects(objects.clone(), &self.wgpu_context.device);
-                self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
-                
-                // Animate camera to first object
-                if let Some(first_pos) = self.highlight_renderer.get_first_object_position() {
-                    self.animate_camera_to_position(first_pos);
-                }
             }
-            McpResponse::Path { path, .. } => {
-                // Update highlighting renderer
-                self.highlight_renderer.set_highlighted_path(Some(path.clone()), &self.wgpu_context.device);
-                self.highlight_renderer.set_highlighted_objects(Vec::new(), &self.wgpu_context.device);
-                
-                // Animate camera along the path for navigation simulation
-                self.animate_camera_along_path(path);
+            
+            // Update highlighting renderer
+            self.highlight_renderer.set_highlighted_objects(response.answer.clone(), &self.wgpu_context.device);
+            self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
+            
+            // Animate camera to first object
+            if let Some(first_pos) = self.highlight_renderer.get_first_object_position() {
+                self.animate_camera_to_position(first_pos);
             }
-            McpResponse::Error { .. } => {
-                // Clear highlights on error
-                self.highlight_renderer.clear_highlights();
-            }
+        } else {
+            // Clear highlights if no objects found
+            self.highlight_renderer.clear_highlights();
         }
     }
 
