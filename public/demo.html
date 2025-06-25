@@ -24,6 +24,39 @@
                 <p class="subtitle is-5">Scenes compressed with <a href="https://keksboter.github.io/c3dgs">Compressed
                         3D Gaussian Splatting for Accelerated Novel View Synthesis</a></p>
             </div>
+
+            <!-- MCP Server Configuration Section -->
+            <div class="column" style="margin-bottom: 1rem;">
+                <div class="notification is-info">
+                    <h2 class="title is-4">🔧 MCP Server Configuration</h2>
+                    <p>Configure the MCP server URL for 3D scene understanding and chat functionality:</p>
+
+                    <div class="field has-addons" style="margin-top: 1rem;">
+                        <div class="control is-expanded">
+                            <input id="mcpUrlInput" class="input" type="text" placeholder="http://localhost:8080"
+                                value="http://localhost:8080">
+                        </div>
+                        <div class="control">
+                            <button class="button is-primary" onclick="saveMcpUrl()">Save</button>
+                        </div>
+                        <div class="control">
+                            <button class="button is-light" onclick="clearMcpUrl()">Clear</button>
+                        </div>
+                    </div>
+                    <p id="storageStatus" class="help"></p>
+
+                    <div class="content" style="margin-top: 1rem;">
+                        <p><strong>Configuration Methods:</strong></p>
+                        <ul>
+                            <li><strong>URL Parameter:</strong> Add <code>?mcp_server_url=http://your-server:8080</code>
+                                to any scene URL</li>
+                            <li><strong>Browser Storage:</strong> Use the form above to save your preferred URL</li>
+                            <li><strong>In-App Settings:</strong> Change URL in real-time via the chat window settings
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
             <div class="column" style="margin-bottom: 1rem;">
                 <a href="https://jonbarron.info/mipnerf360/">
                     <h2 class="title is-3 is-link" style="color:var(--link)">Mip-NeRF360</h2>
@@ -621,6 +654,36 @@
             </div>
         </div>
     </section>
+
+    <script>
+        function saveMcpUrl() {
+            const url = document.getElementById('mcpUrlInput').value;
+            if (url.trim()) {
+                localStorage.setItem('mcp_server_url', url);
+                document.getElementById('storageStatus').innerHTML =
+                    `✅ Saved: ${url} (will be used by default in all scenes)`;
+                document.getElementById('storageStatus').style.color = '#90EE90';
+            }
+        }
+
+        function clearMcpUrl() {
+            localStorage.removeItem('mcp_server_url');
+            document.getElementById('storageStatus').innerHTML =
+                '🗑️ Cleared - will use default localhost:8080';
+            document.getElementById('storageStatus').style.color = '#FFB6C1';
+        }
+
+        // Load current value from storage
+        window.addEventListener('load', function () {
+            const stored = localStorage.getItem('mcp_server_url');
+            if (stored) {
+                document.getElementById('mcpUrlInput').value = stored;
+                document.getElementById('storageStatus').innerHTML =
+                    `💾 Current stored URL: ${stored}`;
+                document.getElementById('storageStatus').style.color = '#87CEEB';
+            }
+        });
+    </script>
 </body>
 
 </html>

@@ -63,6 +63,7 @@ pub struct RenderConfig {
     pub no_vsync: bool,
     pub skybox: Option<PathBuf>,
     pub hdr: bool,
+    pub mcp_server_url: String,
 }
 
 pub struct WGPUContext {
@@ -306,7 +307,10 @@ impl WindowContext {
             scene_file_path: None,
 
             stopwatch,
-            chat_state: ChatState::default(),
+            chat_state: ChatState {
+                mcp_server_url: render_config.mcp_server_url.clone(),
+                ..ChatState::default()
+            },
             pending_chat_responses: Vec::new(),
         })
     }
@@ -1276,6 +1280,42 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
 }
 
 #[cfg(target_arch = "wasm32")]
+fn get_web_mcp_server_url() -> String {
+    use wasm_bindgen::prelude::*;
+    use web_sys::{window, Storage};
+    
+    // Try to get URL from localStorage first
+    if let Some(window) = window() {
+        if let Ok(Some(storage)) = window.local_storage() {
+            if let Ok(Some(stored_url)) = storage.get_item("mcp_server_url") {
+                if !stored_url.is_empty() {
+                    log::info!("Using MCP server URL from localStorage: {}", stored_url);
+                    return stored_url;
+                }
+            }
+        }
+        
+        // Try to get URL from URL parameters
+        if let Some(location) = window.location().href().ok() {
+            if let Ok(url) = web_sys::Url::new(&location) {
+                let search_params = url.search_params();
+                if let Ok(Some(mcp_url)) = search_params.get("mcp_server_url") {
+                    if !mcp_url.is_empty() {
+                        log::info!("Using MCP server URL from URL parameter: {}", mcp_url);
+                        return mcp_url;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Default fallback
+    let default_url = "http://localhost:8080".to_string();
+    log::info!("Using default MCP server URL: {}", default_url);
+    default_url
+}
+
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn run_wasm(
     pc: Vec<u8>,
@@ -1290,6 +1330,9 @@ pub async fn run_wasm(
     let pc_reader = Cursor::new(pc);
     let scene_reader = scene.map(|d: Vec<u8>| Cursor::new(d));
 
+    let mcp_server_url = get_web_mcp_server_url();
+    log::info!("🌐 Web app starting with MCP server URL: {}", mcp_server_url);
+
     wasm_bindgen_futures::spawn_local(open_window(
         pc_reader,
         scene_reader,
@@ -1297,6 +1340,7 @@ pub async fn run_wasm(
             no_vsync: false,
             skybox: None,
             hdr: false,
+            mcp_server_url,
         },
         pc_file.and_then(|s| PathBuf::from_str(s.as_str()).ok()),
         scene_file.and_then(|s| PathBuf::from_str(s.as_str()).ok()),

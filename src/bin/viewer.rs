@@ -23,6 +23,10 @@ struct Opt {
     /// Sky box image
     #[arg(long)]
     skybox: Option<PathBuf>,
+
+    /// MCP server URL for 3D scene understanding chat
+    #[arg(long, env = "MCP_SERVER_URL", default_value = "http://localhost:8080")]
+    mcp_server_url: String,
 }
 
 /// check if there is a scene file in the same directory or parent directory as the input file
@@ -65,6 +69,7 @@ async fn main() {
             no_vsync: opt.no_vsync,
             skybox: opt.skybox,
             hdr: opt.hdr,
+            mcp_server_url: opt.mcp_server_url,
         },
         Some(opt.input),
         opt.scene,

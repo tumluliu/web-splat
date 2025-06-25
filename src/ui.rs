@@ -609,10 +609,32 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
         });
 
     // Chat UI - handle separately to avoid borrowing conflicts
-    let (chat_message, new_input, clear_highlights) = chat_ui(state, ctx);
+    let (chat_message, new_input, clear_highlights, new_server_url) = chat_ui(state, ctx);
 
     // Update chat input state
     state.chat_state.current_input = new_input;
+
+    // Update server URL if changed
+    if state.chat_state.mcp_server_url != new_server_url {
+        state.chat_state.mcp_server_url = new_server_url;
+        log::info!(
+            "MCP server URL updated to: {}",
+            state.chat_state.mcp_server_url
+        );
+
+        // Save to localStorage in WASM builds
+        #[cfg(target_arch = "wasm32")]
+        {
+            use wasm_bindgen::prelude::*;
+
+            if let Some(window) = web_sys::window() {
+                if let Ok(Some(storage)) = window.local_storage() {
+                    let _ = storage.set_item("mcp_server_url", &state.chat_state.mcp_server_url);
+                    log::info!("Saved MCP server URL to localStorage");
+                }
+            }
+        }
+    }
 
     // Handle clear highlights
     if clear_highlights {
@@ -722,7 +744,10 @@ fn optional_checkbox(ui: &mut egui::Ui, opt: &mut Option<bool>, default: bool) {
 }
 
 /// Chat UI for 3D scene understanding
-pub fn chat_ui(state: &WindowContext, ctx: &egui::Context) -> (Option<String>, String, bool) {
+pub fn chat_ui(
+    state: &WindowContext,
+    ctx: &egui::Context,
+) -> (Option<String>, String, bool, String) {
     let mut message_to_send = None;
     let mut current_input = state.chat_state.current_input.clone();
     let mut clear_highlights = false;
@@ -810,12 +835,39 @@ pub fn chat_ui(state: &WindowContext, ctx: &egui::Context) -> (Option<String>, S
             ui.collapsing("Settings", |ui| {
                 ui.horizontal(|ui| {
                     ui.label("MCP Server URL:");
-                    ui.text_edit_singleline(&mut server_url);
+                    let response = ui.text_edit_singleline(&mut server_url);
+                    if response.changed() {
+                        ui.label("⚠️"); // Show warning icon when URL is being edited
+                    }
                 });
+
+                ui.horizontal(|ui| {
+                    ui.label("Status:");
+                    if server_url.starts_with("http://") || server_url.starts_with("https://") {
+                        ui.colored_label(egui::Color32::GREEN, "✓ Valid URL format");
+                    } else {
+                        ui.colored_label(
+                            egui::Color32::RED,
+                            "✗ URL should start with http:// or https://",
+                        );
+                    }
+                });
+
+                ui.label("💡 You can also set this via:");
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    ui.label("  • Command line: --mcp-server-url <URL>");
+                    ui.label("  • Environment: MCP_SERVER_URL=<URL>");
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    ui.label("  • URL parameter: ?mcp_server_url=<URL>");
+                    ui.label("  • Automatically saved in browser storage");
+                }
             });
         });
 
-    (message_to_send, current_input, clear_highlights)
+    (message_to_send, current_input, clear_highlights, server_url)
 }
 
 /// Create mock response for testing - replace with real async handling
