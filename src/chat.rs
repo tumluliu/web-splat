@@ -18,6 +18,8 @@ pub struct SceneObject {
     pub name: String,
     pub aligned_bbox: Vec<[f32; 3]>, // 8 3D points representing the aligned bounding box
     #[serde(default)]
+    pub normal_vector: Option<[f32; 3]>, // Semantic front face normal vector
+    #[serde(default)]
     pub attributes: Option<std::collections::HashMap<String, String>>,
 }
 

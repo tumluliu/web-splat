@@ -614,7 +614,24 @@ impl HighlightRenderer {
                 }
 
                 log::info!("  Using face '{}' as front direction", best_face_name);
-                let direction_vec = best_direction;
+                let smart_direction_vec = best_direction;
+
+                // Also get the MCP-provided normal vector if available
+                let mcp_normal_vec = if let Some(normal) = &obj.normal_vector {
+                    Vector3::new(normal[0], normal[1], normal[2])
+                } else {
+                    Vector3::new(0.0, 0.0, 0.0) // Zero vector if not provided
+                };
+
+                log::info!(
+                    "  MCP provided normal vector: ({:.3}, {:.3}, {:.3})",
+                    mcp_normal_vec.x,
+                    mcp_normal_vec.y,
+                    mcp_normal_vec.z
+                );
+
+                // Use the smart direction for the main logic
+                let direction_vec = smart_direction_vec;
                 log::info!(
                     "  Raw direction vector: ({:.3}, {:.3}, {:.3})",
                     direction_vec.x,
@@ -771,6 +788,63 @@ impl HighlightRenderer {
                     position: arrowhead_point2,
                     color: arrow_color,
                 });
+
+                // Add yellow arrow for MCP normal vector if provided
+                if mcp_normal_vec.magnitude() > 0.001 {
+                    let mcp_arrow_color = Vector4::new(1.0, 1.0, 0.0, 1.0); // Bright yellow, fully opaque
+                    let mcp_arrow_length = arrow_length * 0.8; // Slightly shorter than the green arrow
+                    let mcp_normalized = mcp_normal_vec.normalize();
+                    let mcp_arrow_end = center + mcp_normalized * mcp_arrow_length;
+
+                    log::info!(
+                        "  Adding yellow MCP normal arrow from center to ({:.3}, {:.3}, {:.3})",
+                        mcp_arrow_end.x,
+                        mcp_arrow_end.y,
+                        mcp_arrow_end.z
+                    );
+
+                    // Main MCP arrow line
+                    all_arrow_vertices.push(ArrowVertex {
+                        position: center,
+                        color: mcp_arrow_color,
+                    });
+                    all_arrow_vertices.push(ArrowVertex {
+                        position: mcp_arrow_end,
+                        color: mcp_arrow_color,
+                    });
+
+                    // MCP arrowhead
+                    let mcp_arrowhead_size = arrowhead_size * 0.8; // Slightly smaller
+                    let mcp_perp1 =
+                        Vector3::new(-mcp_normalized.z, 0.0, mcp_normalized.x).normalize();
+                    let mcp_perp2 = Vector3::new(0.0, 1.0, 0.0)
+                        .cross(mcp_normalized)
+                        .normalize();
+
+                    // MCP arrowhead line 1
+                    let mcp_arrowhead_point1 = mcp_arrow_end - mcp_normalized * mcp_arrowhead_size
+                        + mcp_perp1 * mcp_arrowhead_size * 0.5;
+                    all_arrow_vertices.push(ArrowVertex {
+                        position: mcp_arrow_end,
+                        color: mcp_arrow_color,
+                    });
+                    all_arrow_vertices.push(ArrowVertex {
+                        position: mcp_arrowhead_point1,
+                        color: mcp_arrow_color,
+                    });
+
+                    // MCP arrowhead line 2
+                    let mcp_arrowhead_point2 = mcp_arrow_end - mcp_normalized * mcp_arrowhead_size
+                        + mcp_perp2 * mcp_arrowhead_size * 0.5;
+                    all_arrow_vertices.push(ArrowVertex {
+                        position: mcp_arrow_end,
+                        color: mcp_arrow_color,
+                    });
+                    all_arrow_vertices.push(ArrowVertex {
+                        position: mcp_arrowhead_point2,
+                        color: mcp_arrow_color,
+                    });
+                }
             } else {
                 log::warn!(
                     "Object {} has {} vertices, expected 8. Skipping.",
@@ -1023,7 +1097,21 @@ impl HighlightRenderer {
                     best_face_name,
                     best_score
                 );
-                let direction_vec = best_direction;
+
+                // Use MCP normal vector if available, otherwise use smart selection
+                let direction_vec = if let Some(normal) = &obj.normal_vector {
+                    let mcp_normal = Vector3::new(normal[0], normal[1], normal[2]);
+                    if mcp_normal.magnitude() > 0.001 {
+                        log::info!("  Using MCP-provided normal vector for camera positioning");
+                        mcp_normal
+                    } else {
+                        log::info!("  MCP normal vector is zero, using smart-selected direction");
+                        best_direction
+                    }
+                } else {
+                    log::info!("  No MCP normal vector provided, using smart-selected direction");
+                    best_direction
+                };
                 let mut front_direction = if direction_vec.magnitude() < 0.001 {
                     Vector3::new(0.0, 0.0, 1.0) // default direction
                 } else {

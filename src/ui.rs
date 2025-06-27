@@ -947,6 +947,7 @@ pub fn create_mock_response(_message: &str) -> McpResponse {
     let object = crate::chat::SceneObject {
         name: "Coffee Machine".to_string(),
         aligned_bbox,
+        normal_vector: Some([0.0, 1.0, 0.0]), // Pointing upward for testing
         attributes: Some(attributes),
     };
 

@@ -362,10 +362,41 @@ def handle_query():
                 ],  # Top-back-left
             ]
 
+            # Generate semantic front face normal vector based on object type
+            normal_vector = [0.0, 0.0, 1.0]  # Default forward direction
+            object_type = obj["attributes"].get("type", "")
+            object_subtype = obj["attributes"].get("subtype", "")
+
+            # Define semantic front directions for different object types
+            if "chair" in obj["name"].lower():
+                normal_vector = [
+                    0.0,
+                    0.0,
+                    -1.0,
+                ]  # Chairs face negative Z (toward where person sits)
+            elif "table" in object_type:
+                normal_vector = [1.0, 0.0, 0.0]  # Tables face positive X (longest side)
+            elif "sofa" in obj["name"].lower():
+                normal_vector = [0.0, 0.0, -1.0]  # Sofas face where people sit
+            elif "counter" in object_type:
+                normal_vector = [0.0, 0.0, -1.0]  # Counters face the user side
+            elif object_subtype == "refrigerator":
+                normal_vector = [1.0, 0.0, 0.0]  # Refrigerator door faces positive X
+            elif object_subtype == "coffee_machine":
+                normal_vector = [
+                    0.0,
+                    1.0,
+                    0.0,
+                ]  # Coffee machine front faces positive Y (upward for testing)
+            else:
+                # For unknown objects, use a reasonable default
+                normal_vector = [1.0, 0.0, 0.0]
+
             answer_objects.append(
                 {
                     "name": obj["name"],
                     "aligned_bbox": aligned_bbox,
+                    "normal_vector": normal_vector,
                     "attributes": obj.get("attributes"),
                 }
             )
