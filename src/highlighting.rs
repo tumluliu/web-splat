@@ -11,11 +11,13 @@ pub struct HighlightRenderer {
     box_pipeline: wgpu::RenderPipeline,
     wireframe_pipeline: wgpu::RenderPipeline,
     path_pipeline: wgpu::RenderPipeline,
+    arrow_pipeline: wgpu::RenderPipeline,
     box_vertex_buffer: Option<wgpu::Buffer>,
     box_index_buffer: Option<wgpu::Buffer>,
     wireframe_vertex_buffer: Option<wgpu::Buffer>,
     wireframe_index_buffer: Option<wgpu::Buffer>,
     path_vertex_buffer: Option<wgpu::Buffer>,
+    arrow_vertex_buffer: Option<wgpu::Buffer>,
     highlighted_objects: Vec<SceneObject>,
     highlighted_path: Option<ScenePath>,
     box_instances_buffer: Option<wgpu::Buffer>,
@@ -23,6 +25,7 @@ pub struct HighlightRenderer {
     box_vertex_count: u32,
     wireframe_vertex_count: u32,
     path_vertex_count: u32,
+    arrow_vertex_count: u32,
 }
 
 #[repr(C)]
@@ -46,11 +49,19 @@ struct PathVertex {
     color: Vector4<f32>,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct ArrowVertex {
+    position: Vector3<f32>,
+    color: Vector4<f32>,
+}
+
 impl HighlightRenderer {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
         let box_pipeline = Self::create_box_pipeline(device, target_format);
         let wireframe_pipeline = Self::create_wireframe_pipeline(device, target_format);
         let path_pipeline = Self::create_path_pipeline(device, target_format);
+        let arrow_pipeline = Self::create_arrow_pipeline(device, target_format);
 
         // Create static box geometry (unit cube wireframe)
         let (box_vertex_buffer, box_index_buffer) = Self::create_box_geometry(device);
@@ -61,11 +72,13 @@ impl HighlightRenderer {
             box_pipeline,
             wireframe_pipeline,
             path_pipeline,
+            arrow_pipeline,
             box_vertex_buffer: Some(box_vertex_buffer),
             box_index_buffer: Some(box_index_buffer),
             wireframe_vertex_buffer: Some(wireframe_vertex_buffer),
             wireframe_index_buffer: Some(wireframe_index_buffer),
             path_vertex_buffer: None,
+            arrow_vertex_buffer: None,
             highlighted_objects: Vec::new(),
             highlighted_path: None,
             box_instances_buffer: None,
@@ -73,6 +86,7 @@ impl HighlightRenderer {
             box_vertex_count: 0,
             wireframe_vertex_count: 0,
             path_vertex_count: 0,
+            arrow_vertex_count: 0,
         }
     }
 
@@ -189,6 +203,68 @@ impl HighlightRenderer {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::LineStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    fn create_arrow_pipeline(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("highlight arrow pipeline layout"),
+            bind_group_layouts: &[&UniformBuffer::<CameraUniform>::bind_group_layout(device)],
+            push_constant_ranges: &[],
+        });
+
+        let shader = device.create_shader_module(include_wgsl!("shaders/highlight_direct.wgsl"));
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("highlight arrow pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[VertexBufferLayout {
+                    array_stride: std::mem::size_of::<ArrowVertex>() as wgpu::BufferAddress,
+                    step_mode: VertexStepMode::Vertex,
+                    attributes: &[
+                        VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: VertexFormat::Float32x3,
+                        },
+                        VertexAttribute {
+                            offset: std::mem::size_of::<Vector3<f32>>() as wgpu::BufferAddress,
+                            shader_location: 1,
+                            format: VertexFormat::Float32x4,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: None,
@@ -344,7 +420,10 @@ impl HighlightRenderer {
     }
 
     pub fn set_highlighted_objects(&mut self, objects: Vec<SceneObject>, device: &wgpu::Device) {
-        log::info!("Setting {} highlighted objects", objects.len());
+        log::info!(
+            "🔥🔥🔥 HIGHLIGHT RENDERER: Setting {} highlighted objects",
+            objects.len()
+        );
         self.highlighted_objects = objects;
         self.update_box_instances(device);
     }
@@ -360,15 +439,18 @@ impl HighlightRenderer {
         self.box_instances_buffer = None;
         self.wireframe_instances_buffer = None;
         self.path_vertex_buffer = None;
+        self.arrow_vertex_buffer = None;
         self.box_vertex_count = 0;
         self.wireframe_vertex_count = 0;
         self.path_vertex_count = 0;
+        self.arrow_vertex_count = 0;
     }
 
     fn update_box_instances(&mut self, device: &wgpu::Device) {
         if self.highlighted_objects.is_empty() {
             self.box_instances_buffer = None;
             self.wireframe_instances_buffer = None;
+            self.arrow_vertex_buffer = None;
             return;
         }
 
@@ -380,6 +462,7 @@ impl HighlightRenderer {
         // Create vertex buffers using exact coordinates from MCP server
         let mut all_box_vertices = Vec::new();
         let mut all_wireframe_vertices = Vec::new();
+        let mut all_arrow_vertices: Vec<ArrowVertex> = Vec::new();
 
         for (i, obj) in self.highlighted_objects.iter().enumerate() {
             if obj.aligned_bbox.len() >= 8 {
@@ -465,6 +548,194 @@ impl HighlightRenderer {
                 for &index in &edge_indices {
                     all_wireframe_vertices.push(wireframe_vertices[index]);
                 }
+
+                // Create arrow from center to front face center and extend outward
+                // Calculate bbox center
+                let mut center = Vector3::new(0.0, 0.0, 0.0);
+                for point in &obj.aligned_bbox {
+                    center.x += point[0];
+                    center.y += point[1];
+                    center.z += point[2];
+                }
+                center /= 8.0;
+
+                // Calculate front face center (vertices 2, 3, 6, 7)
+                let front_face_center = Vector3::new(
+                    (obj.aligned_bbox[2][0]
+                        + obj.aligned_bbox[3][0]
+                        + obj.aligned_bbox[6][0]
+                        + obj.aligned_bbox[7][0])
+                        / 4.0,
+                    (obj.aligned_bbox[2][1]
+                        + obj.aligned_bbox[3][1]
+                        + obj.aligned_bbox[6][1]
+                        + obj.aligned_bbox[7][1])
+                        / 4.0,
+                    (obj.aligned_bbox[2][2]
+                        + obj.aligned_bbox[3][2]
+                        + obj.aligned_bbox[6][2]
+                        + obj.aligned_bbox[7][2])
+                        / 4.0,
+                );
+
+                // Calculate front direction (from center to front face center)
+                let direction_vec = front_face_center - center;
+                log::info!(
+                    "  Raw direction vector: ({:.3}, {:.3}, {:.3})",
+                    direction_vec.x,
+                    direction_vec.y,
+                    direction_vec.z
+                );
+
+                // If the direction is too small, use a default direction
+                let mut front_direction = if direction_vec.magnitude() < 0.001 {
+                    log::info!("  Direction vector too small, using default +Z direction");
+                    Vector3::new(0.0, 0.0, 1.0)
+                } else {
+                    direction_vec.normalize()
+                };
+
+                // Avoid camera singularity: if arrow points too vertically, add slight horizontal offset
+                if front_direction.y.abs() > 0.95 {
+                    // Add a small horizontal component to avoid pure vertical look
+                    front_direction.x += 0.3;
+                    front_direction.z += 0.3;
+                    front_direction = front_direction.normalize();
+                    log::info!(
+                        "  Adjusted direction to avoid camera singularity: ({:.3}, {:.3}, {:.3})",
+                        front_direction.x,
+                        front_direction.y,
+                        front_direction.z
+                    );
+                }
+
+                // Calculate object dimensions for reasonable distance
+                let width = (Vector3::new(
+                    obj.aligned_bbox[2][0],
+                    obj.aligned_bbox[2][1],
+                    obj.aligned_bbox[2][2],
+                ) - Vector3::new(
+                    obj.aligned_bbox[3][0],
+                    obj.aligned_bbox[3][1],
+                    obj.aligned_bbox[3][2],
+                ))
+                .magnitude();
+                let height = (Vector3::new(
+                    obj.aligned_bbox[7][0],
+                    obj.aligned_bbox[7][1],
+                    obj.aligned_bbox[7][2],
+                ) - Vector3::new(
+                    obj.aligned_bbox[3][0],
+                    obj.aligned_bbox[3][1],
+                    obj.aligned_bbox[3][2],
+                ))
+                .magnitude();
+                let depth = (Vector3::new(
+                    obj.aligned_bbox[0][0],
+                    obj.aligned_bbox[0][1],
+                    obj.aligned_bbox[0][2],
+                ) - Vector3::new(
+                    obj.aligned_bbox[3][0],
+                    obj.aligned_bbox[3][1],
+                    obj.aligned_bbox[3][2],
+                ))
+                .magnitude();
+                let max_dimension = width.max(depth).max(height);
+
+                // Make arrow much longer and more visible for better camera positioning
+                let arrow_length = (max_dimension * 6.5).max(10.0); // Optimal distance for camera positioning
+                let arrow_end = center + front_direction * arrow_length;
+
+                // Log the arrow information
+                log::info!("ARROW INFO for object '{}' (index {}):", obj.name, i);
+                log::info!(
+                    "  Bbox center: ({:.3}, {:.3}, {:.3})",
+                    center.x,
+                    center.y,
+                    center.z
+                );
+                log::info!(
+                    "  Front face center: ({:.3}, {:.3}, {:.3})",
+                    front_face_center.x,
+                    front_face_center.y,
+                    front_face_center.z
+                );
+                log::info!(
+                    "  Front direction: ({:.3}, {:.3}, {:.3})",
+                    front_direction.x,
+                    front_direction.y,
+                    front_direction.z
+                );
+                log::info!(
+                    "  Dimensions: W={:.3}, D={:.3}, H={:.3}, Max={:.3}",
+                    width,
+                    depth,
+                    height,
+                    max_dimension
+                );
+                log::info!("  Arrow length: {:.3}", arrow_length);
+                log::info!(
+                    "  Arrow endpoint: ({:.3}, {:.3}, {:.3})",
+                    arrow_end.x,
+                    arrow_end.y,
+                    arrow_end.z
+                );
+                log::info!(
+                    "  Suggested camera position: ({:.3}, {:.3}, {:.3})",
+                    arrow_end.x,
+                    arrow_end.y,
+                    arrow_end.z
+                );
+                log::info!(
+                    "  Suggested camera target: ({:.3}, {:.3}, {:.3})",
+                    center.x,
+                    center.y,
+                    center.z
+                );
+
+                // Create arrow vertices (bright green line)
+                let arrow_color = Vector4::new(0.0, 1.0, 0.0, 1.0); // Bright green, fully opaque
+
+                // Main arrow line
+                all_arrow_vertices.push(ArrowVertex {
+                    position: center,
+                    color: arrow_color,
+                });
+                all_arrow_vertices.push(ArrowVertex {
+                    position: arrow_end,
+                    color: arrow_color,
+                });
+
+                // Simple arrowhead - create two lines forming a ">" shape
+                let arrowhead_size = (max_dimension * 0.5).max(1.0); // 50% of object size, minimum 1.0 unit
+                let perp1 = Vector3::new(-front_direction.z, 0.0, front_direction.x).normalize(); // perpendicular vector 1
+                let perp2 = Vector3::new(0.0, 1.0, 0.0)
+                    .cross(front_direction)
+                    .normalize(); // perpendicular vector 2
+
+                // Arrowhead line 1
+                let arrowhead_point1 =
+                    arrow_end - front_direction * arrowhead_size + perp1 * arrowhead_size * 0.5;
+                all_arrow_vertices.push(ArrowVertex {
+                    position: arrow_end,
+                    color: arrow_color,
+                });
+                all_arrow_vertices.push(ArrowVertex {
+                    position: arrowhead_point1,
+                    color: arrow_color,
+                });
+
+                // Arrowhead line 2
+                let arrowhead_point2 =
+                    arrow_end - front_direction * arrowhead_size + perp2 * arrowhead_size * 0.5;
+                all_arrow_vertices.push(ArrowVertex {
+                    position: arrow_end,
+                    color: arrow_color,
+                });
+                all_arrow_vertices.push(ArrowVertex {
+                    position: arrowhead_point2,
+                    color: arrow_color,
+                });
             } else {
                 log::warn!(
                     "Object {} has {} vertices, expected 8. Skipping.",
@@ -501,6 +772,26 @@ impl HighlightRenderer {
         } else {
             self.wireframe_vertex_count = 0;
             self.wireframe_instances_buffer = None;
+        }
+
+        // Create arrow buffer
+        if !all_arrow_vertices.is_empty() {
+            self.arrow_vertex_count = all_arrow_vertices.len() as u32;
+            log::info!(
+                "Creating arrow buffer with {} vertices",
+                self.arrow_vertex_count
+            );
+            self.arrow_vertex_buffer = Some(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("highlight arrow vertices"),
+                    contents: bytemuck::cast_slice(&all_arrow_vertices),
+                    usage: BufferUsages::VERTEX,
+                },
+            ));
+        } else {
+            log::info!("No arrow vertices to create buffer");
+            self.arrow_vertex_count = 0;
+            self.arrow_vertex_buffer = None;
         }
     }
 
@@ -571,6 +862,16 @@ impl HighlightRenderer {
                 render_pass.draw(0..self.path_vertex_count, 0..1);
             }
         }
+
+        // Render arrows (green direction indicators)
+        if let Some(arrow_buffer) = &self.arrow_vertex_buffer {
+            if self.arrow_vertex_count > 0 {
+                render_pass.set_pipeline(&self.arrow_pipeline);
+                render_pass.set_bind_group(0, camera.bind_group(), &[]);
+                render_pass.set_vertex_buffer(0, arrow_buffer.slice(..));
+                render_pass.draw(0..self.arrow_vertex_count, 0..1);
+            }
+        }
     }
 
     pub fn get_first_object_position(&self) -> Option<Point3<f32>> {
@@ -630,70 +931,59 @@ impl HighlightRenderer {
                 let back_face_center =
                     (bbox_points[0] + bbox_points[1] + bbox_points[4] + bbox_points[5]) / 4.0;
 
-                // The "outward normal" from front face - this is where camera should be positioned
-                // Calculate it more reliably using cross product of front face edges
-                let front_horizontal = bbox_points[2] - bbox_points[3]; // front right - front left
-                let front_vertical = bbox_points[7] - bbox_points[3]; // top front left - bottom front left
-                let front_normal = front_horizontal.cross(front_vertical).normalize();
-
-                // Make sure normal points outward (away from object center)
-                let to_center = center - front_face_center;
-                let outward_normal = if front_normal.dot(to_center) > 0.0 {
-                    -front_normal // flip if pointing inward
+                // Calculate the arrow direction and endpoint (same logic as in update_box_instances)
+                let direction_vec = front_face_center - center;
+                let mut front_direction = if direction_vec.magnitude() < 0.001 {
+                    Vector3::new(0.0, 0.0, 1.0) // default direction
                 } else {
-                    front_normal
+                    direction_vec.normalize()
                 };
 
-                // Based on user feedback - good position was:
-                // Object: (19.101, 5.089, 4.355), Camera: (9.115, 6.411, -5.250)
-                // This shows camera offset: (-9.986, 1.322, -9.605) = roughly 14 units away
-                // The pattern suggests: back-left-and-down from object, slightly above object level
+                // Avoid camera singularity: if arrow points too vertically, add slight horizontal offset
+                if front_direction.y.abs() > 0.95 {
+                    // Add a small horizontal component to avoid pure vertical look
+                    front_direction.x += 0.3;
+                    front_direction.z += 0.3;
+                    front_direction = front_direction.normalize();
+                    log::info!(
+                        "  Adjusted direction to avoid camera singularity: ({:.3}, {:.3}, {:.3})",
+                        front_direction.x,
+                        front_direction.y,
+                        front_direction.z
+                    );
+                }
 
-                let total_distance = max_dimension * 15.0; // Large distance for good overview
+                // Calculate arrow endpoint (same as in arrow creation)
+                let arrow_length = (max_dimension * 6.5).max(10.0); // Optimal distance for framing
+                let arrow_end = center + front_direction * arrow_length;
 
-                // Create a better default viewing direction: front-left-above
-                // This mimics typical 3D viewing angles that work well
-                let view_direction = Vector3::new(-0.6, 0.2, -0.77).normalize(); // front-left-above direction
+                // Use the arrow endpoint directly as camera position
+                let camera_position = Point3::from_vec(arrow_end);
 
-                let camera_position = Point3::from_vec(center + view_direction * total_distance);
+                let is_vertical_arrow = front_direction.y.abs() > 0.8;
+                // Apply target compensation based on observed offset patterns
+                // Fine-tuned based on latest View Information results
+                let target_offset = Vector3::new(4.4, -2.0, 3.7); // Refined offset pattern
+                let compensated_target = center + target_offset;
 
-                log::info!("Object viewing analysis:");
+                log::info!("Target-compensated camera positioning:");
                 log::info!(
-                    "  Object center: ({:.3}, {:.3}, {:.3})",
+                    "  Original object center: ({:.3}, {:.3}, {:.3})",
                     center.x,
                     center.y,
                     center.z
                 );
                 log::info!(
-                    "  Front face center: ({:.3}, {:.3}, {:.3})",
-                    front_face_center.x,
-                    front_face_center.y,
-                    front_face_center.z
+                    "  Compensated target: ({:.3}, {:.3}, {:.3})",
+                    compensated_target.x,
+                    compensated_target.y,
+                    compensated_target.z
                 );
                 log::info!(
-                    "  Back face center: ({:.3}, {:.3}, {:.3})",
-                    back_face_center.x,
-                    back_face_center.y,
-                    back_face_center.z
-                );
-                log::info!(
-                    "  Outward normal: ({:.3}, {:.3}, {:.3})",
-                    outward_normal.x,
-                    outward_normal.y,
-                    outward_normal.z
-                );
-                log::info!(
-                    "  Dimensions: W={:.3}, D={:.3}, H={:.3}",
-                    width,
-                    depth,
-                    height
-                );
-                log::info!("  Total distance: {:.3}", total_distance);
-                log::info!(
-                    "  View direction: ({:.3}, {:.3}, {:.3})",
-                    view_direction.x,
-                    view_direction.y,
-                    view_direction.z
+                    "  Arrow direction: ({:.3}, {:.3}, {:.3})",
+                    front_direction.x,
+                    front_direction.y,
+                    front_direction.z
                 );
                 log::info!(
                     "  Camera position: ({:.3}, {:.3}, {:.3})",
@@ -701,8 +991,16 @@ impl HighlightRenderer {
                     camera_position.y,
                     camera_position.z
                 );
+                log::info!(
+                    "  Distance to object: {:.3}",
+                    (Vector3::from(camera_position.to_vec()) - center).magnitude()
+                );
 
-                Some((Point3::from_vec(center), camera_position, max_dimension))
+                Some((
+                    Point3::from_vec(compensated_target),
+                    camera_position,
+                    max_dimension,
+                ))
             } else {
                 None
             }
