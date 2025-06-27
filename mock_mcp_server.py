@@ -299,15 +299,19 @@ def handle_query():
     try:
         print("🔄 Attempting to parse JSON...")
         data = request.json
-        prompt = data.get("prompt", "")
+        messages = data.get("messages", "")
         context = data.get("context", "")
+        current_location = data.get("current_location", [0.0, 0.0, 0.0])
 
         print(f"✅ JSON PARSED SUCCESSFULLY!")
-        print(f"💬 Prompt: '{prompt}'")
+        print(f"💬 Messages: '{messages}'")
         print(f"🔍 Context: '{context}'")
+        print(
+            f"📍 Current location: [{current_location[0]:.3f}, {current_location[1]:.3f}, {current_location[2]:.3f}]"
+        )
 
-        # Find objects based on the prompt
-        objects = find_objects_by_query(prompt)
+        # Find objects based on the messages
+        objects = find_objects_by_query(messages)
 
         # Convert objects to new format with aligned_bbox
         answer_objects = []
@@ -427,7 +431,7 @@ def index():
             "name": "Mock MCP Server for 3D Scene Understanding",
             "version": "1.0.0",
             "endpoints": {
-                "/query": "POST - Send 3D scene understanding queries",
+                "/query": "POST - Send 3D scene understanding queries (expects JSON with 'messages', 'context', and 'current_location' fields)",
                 "/health": "GET - Health check",
                 "/": "GET - This documentation",
             },

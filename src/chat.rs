@@ -92,16 +92,24 @@ impl ChatState {
 pub async fn send_chat_message(
     message: String,
     server_url: &str,
+    current_location: [f32; 3],
 ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
     log::info!("🔥 send_chat_message called");
     log::info!("📍 Server URL: {}", server_url);
     log::info!("💬 Message: {}", message);
+    log::info!(
+        "📍 Current camera location: [{:.3}, {:.3}, {:.3}]",
+        current_location[0],
+        current_location[1],
+        current_location[2]
+    );
 
     let client = reqwest::Client::new();
 
     let request_body = serde_json::json!({
-        "prompt": message,
-        "context": "3d_scene_understanding"
+        "messages": message,
+        "context": "3d_scene_understanding",
+        "current_location": current_location
     });
 
     log::info!(
@@ -144,6 +152,7 @@ pub async fn send_chat_message(
 pub async fn send_chat_message(
     message: String,
     server_url: &str,
+    current_location: [f32; 3],
 ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
     use wasm_bindgen::prelude::*;
     use wasm_bindgen_futures::JsFuture;
@@ -152,10 +161,17 @@ pub async fn send_chat_message(
     log::info!("🔥 send_chat_message called (WASM version)");
     log::info!("📍 Server URL: {}", server_url);
     log::info!("💬 Message: {}", message);
+    log::info!(
+        "📍 Current camera location: [{:.3}, {:.3}, {:.3}]",
+        current_location[0],
+        current_location[1],
+        current_location[2]
+    );
 
     let request_body = serde_json::json!({
-        "prompt": message,
-        "context": "3d_scene_understanding"
+        "messages": message,
+        "context": "3d_scene_understanding",
+        "current_location": current_location
     });
 
     log::info!(

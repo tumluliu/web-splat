@@ -393,8 +393,10 @@ impl WindowContext {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let msg_clone = message.clone();
+            let camera_pos = self.splatting_args.camera.position;
+            let current_location = [camera_pos.x, camera_pos.y, camera_pos.z];
             let rt = tokio::runtime::Runtime::new().unwrap();
-            match rt.block_on(crate::chat::send_chat_message(msg_clone, &server_url)) {
+            match rt.block_on(crate::chat::send_chat_message(msg_clone, &server_url, current_location)) {
                 Ok(response) => {
                     log::info!("Received HTTP response successfully");
                     self.pending_chat_responses.push((message, response));
@@ -417,6 +419,8 @@ impl WindowContext {
             
             let msg_clone = message.clone();
             let server_url_clone = server_url.clone();
+            let camera_pos = self.splatting_args.camera.position;
+            let current_location = [camera_pos.x, camera_pos.y, camera_pos.z];
             
             // Create a unique identifier for this request
             let request_id = format!("{}_{}", message.len(), chrono::Utc::now().timestamp_millis());
@@ -426,7 +430,7 @@ impl WindowContext {
             
             wasm_bindgen_futures::spawn_local(async move {
                 log::info!("Starting WASM HTTP request...");
-                match crate::chat::send_chat_message(msg_clone.clone(), &server_url_clone).await {
+                match crate::chat::send_chat_message(msg_clone.clone(), &server_url_clone, current_location).await {
                     Ok(response) => {
                         log::info!("WASM HTTP request successful!");
                         // Store the response in a global location that the main thread can access
