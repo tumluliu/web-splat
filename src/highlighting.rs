@@ -559,27 +559,62 @@ impl HighlightRenderer {
                 }
                 center /= 8.0;
 
-                // Calculate front face center (vertices 2, 3, 6, 7)
-                let front_face_center = Vector3::new(
-                    (obj.aligned_bbox[2][0]
-                        + obj.aligned_bbox[3][0]
-                        + obj.aligned_bbox[6][0]
-                        + obj.aligned_bbox[7][0])
-                        / 4.0,
-                    (obj.aligned_bbox[2][1]
-                        + obj.aligned_bbox[3][1]
-                        + obj.aligned_bbox[6][1]
-                        + obj.aligned_bbox[7][1])
-                        / 4.0,
-                    (obj.aligned_bbox[2][2]
-                        + obj.aligned_bbox[3][2]
-                        + obj.aligned_bbox[6][2]
-                        + obj.aligned_bbox[7][2])
-                        / 4.0,
-                );
+                // Convert bbox points to Vector3 for easier math
+                let bbox_points: Vec<Vector3<f32>> = obj
+                    .aligned_bbox
+                    .iter()
+                    .map(|p| Vector3::new(p[0], p[1], p[2]))
+                    .collect();
 
-                // Calculate front direction (from center to front face center)
-                let direction_vec = front_face_center - center;
+                // Calculate centers of all 6 faces to find the best "front" direction
+                let front_face_center =
+                    (bbox_points[2] + bbox_points[3] + bbox_points[6] + bbox_points[7]) / 4.0; // front vertices
+                let back_face_center =
+                    (bbox_points[0] + bbox_points[1] + bbox_points[4] + bbox_points[5]) / 4.0; // back vertices
+                let right_face_center =
+                    (bbox_points[1] + bbox_points[2] + bbox_points[5] + bbox_points[6]) / 4.0; // right vertices
+                let left_face_center =
+                    (bbox_points[0] + bbox_points[3] + bbox_points[4] + bbox_points[7]) / 4.0; // left vertices
+                let top_face_center =
+                    (bbox_points[4] + bbox_points[5] + bbox_points[6] + bbox_points[7]) / 4.0; // top vertices
+                let bottom_face_center =
+                    (bbox_points[0] + bbox_points[1] + bbox_points[2] + bbox_points[3]) / 4.0; // bottom vertices
+
+                // Calculate direction vectors for each face
+                let face_directions = [
+                    ("front", front_face_center - center),
+                    ("back", back_face_center - center),
+                    ("right", right_face_center - center),
+                    ("left", left_face_center - center),
+                    ("top", top_face_center - center),
+                    ("bottom", bottom_face_center - center),
+                ];
+
+                // Find the face that gives the most reasonable viewing direction
+                let mut best_direction = front_face_center - center;
+                let mut best_face_name = "front";
+                let mut best_score = 0.0;
+
+                for (face_name, direction) in &face_directions {
+                    let length = direction.magnitude();
+                    if length > 0.001 {
+                        let normalized = direction.normalize();
+                        // Score based on: reasonable horizontal component and good distance
+                        let horizontal_component =
+                            (normalized.x.abs() + normalized.z.abs()).max(0.3);
+                        let vertical_penalty = if normalized.y.abs() > 0.9 { 0.3 } else { 1.0 };
+                        let score = length * horizontal_component * vertical_penalty;
+
+                        if score > best_score {
+                            best_score = score;
+                            best_direction = *direction;
+                            best_face_name = face_name;
+                        }
+                    }
+                }
+
+                log::info!("  Using face '{}' as front direction", best_face_name);
+                let direction_vec = best_direction;
                 log::info!(
                     "  Raw direction vector: ({:.3}, {:.3}, {:.3})",
                     direction_vec.x,
@@ -655,10 +690,10 @@ impl HighlightRenderer {
                     center.z
                 );
                 log::info!(
-                    "  Front face center: ({:.3}, {:.3}, {:.3})",
-                    front_face_center.x,
-                    front_face_center.y,
-                    front_face_center.z
+                    "  Selected face center: ({:.3}, {:.3}, {:.3})",
+                    (center + direction_vec).x,
+                    (center + direction_vec).y,
+                    (center + direction_vec).z
                 );
                 log::info!(
                     "  Front direction: ({:.3}, {:.3}, {:.3})",
@@ -925,14 +960,70 @@ impl HighlightRenderer {
                 let depth = (bbox_points[0] - bbox_points[3]).magnitude(); // depth (back left - front left)
                 let max_dimension = width.max(depth).max(height);
 
-                // Calculate centers of front and back faces
+                // Calculate centers of all 6 faces to find the best "front" direction
                 let front_face_center =
-                    (bbox_points[2] + bbox_points[3] + bbox_points[6] + bbox_points[7]) / 4.0;
+                    (bbox_points[2] + bbox_points[3] + bbox_points[6] + bbox_points[7]) / 4.0; // front vertices
                 let back_face_center =
-                    (bbox_points[0] + bbox_points[1] + bbox_points[4] + bbox_points[5]) / 4.0;
+                    (bbox_points[0] + bbox_points[1] + bbox_points[4] + bbox_points[5]) / 4.0; // back vertices
+                let right_face_center =
+                    (bbox_points[1] + bbox_points[2] + bbox_points[5] + bbox_points[6]) / 4.0; // right vertices
+                let left_face_center =
+                    (bbox_points[0] + bbox_points[3] + bbox_points[4] + bbox_points[7]) / 4.0; // left vertices
+                let top_face_center =
+                    (bbox_points[4] + bbox_points[5] + bbox_points[6] + bbox_points[7]) / 4.0; // top vertices
+                let bottom_face_center =
+                    (bbox_points[0] + bbox_points[1] + bbox_points[2] + bbox_points[3]) / 4.0; // bottom vertices
 
-                // Calculate the arrow direction and endpoint (same logic as in update_box_instances)
-                let direction_vec = front_face_center - center;
+                // Calculate direction vectors for each face
+                let face_directions = [
+                    ("front", front_face_center - center),
+                    ("back", back_face_center - center),
+                    ("right", right_face_center - center),
+                    ("left", left_face_center - center),
+                    ("top", top_face_center - center),
+                    ("bottom", bottom_face_center - center),
+                ];
+
+                // Find the face that gives the most reasonable viewing direction
+                // Prefer faces that point outward and away from the center, and avoid purely vertical directions
+                let mut best_direction = front_face_center - center;
+                let mut best_face_name = "front";
+                let mut best_score = 0.0;
+
+                for (face_name, direction) in &face_directions {
+                    let length = direction.magnitude();
+                    if length > 0.001 {
+                        let normalized = direction.normalize();
+                        // Score based on: reasonable horizontal component (not too vertical) and good distance
+                        let horizontal_component =
+                            (normalized.x.abs() + normalized.z.abs()).max(0.3);
+                        let vertical_penalty = if normalized.y.abs() > 0.9 { 0.3 } else { 1.0 };
+                        let score = length * horizontal_component * vertical_penalty;
+
+                        log::info!(
+                            "  Face {}: direction ({:.3}, {:.3}, {:.3}), length {:.3}, score {:.3}",
+                            face_name,
+                            normalized.x,
+                            normalized.y,
+                            normalized.z,
+                            length,
+                            score
+                        );
+
+                        if score > best_score {
+                            best_score = score;
+                            best_direction = *direction;
+                            best_face_name = face_name;
+                        }
+                    }
+                }
+
+                log::info!(
+                    "  Selected best face: {} with score {:.3}",
+                    best_face_name,
+                    best_score
+                );
+                let direction_vec = best_direction;
                 let mut front_direction = if direction_vec.magnitude() < 0.001 {
                     Vector3::new(0.0, 0.0, 1.0) // default direction
                 } else {
