@@ -745,52 +745,10 @@ impl HighlightRenderer {
                     center.z
                 );
 
-                // Create arrow vertices (bright green line)
-                let arrow_color = Vector4::new(0.0, 1.0, 0.0, 1.0); // Bright green, fully opaque
-
-                // Main arrow line
-                all_arrow_vertices.push(ArrowVertex {
-                    position: center,
-                    color: arrow_color,
-                });
-                all_arrow_vertices.push(ArrowVertex {
-                    position: arrow_end,
-                    color: arrow_color,
-                });
-
-                // Simple arrowhead - create two lines forming a ">" shape
-                let arrowhead_size = (max_dimension * 0.5).max(1.0); // 50% of object size, minimum 1.0 unit
-                let perp1 = Vector3::new(-front_direction.z, 0.0, front_direction.x).normalize(); // perpendicular vector 1
-                let perp2 = Vector3::new(0.0, 1.0, 0.0)
-                    .cross(front_direction)
-                    .normalize(); // perpendicular vector 2
-
-                // Arrowhead line 1
-                let arrowhead_point1 =
-                    arrow_end - front_direction * arrowhead_size + perp1 * arrowhead_size * 0.5;
-                all_arrow_vertices.push(ArrowVertex {
-                    position: arrow_end,
-                    color: arrow_color,
-                });
-                all_arrow_vertices.push(ArrowVertex {
-                    position: arrowhead_point1,
-                    color: arrow_color,
-                });
-
-                // Arrowhead line 2
-                let arrowhead_point2 =
-                    arrow_end - front_direction * arrowhead_size + perp2 * arrowhead_size * 0.5;
-                all_arrow_vertices.push(ArrowVertex {
-                    position: arrow_end,
-                    color: arrow_color,
-                });
-                all_arrow_vertices.push(ArrowVertex {
-                    position: arrowhead_point2,
-                    color: arrow_color,
-                });
-
                 // Add yellow arrow for MCP normal vector if provided
                 if mcp_normal_vec.magnitude() > 0.001 {
+                    // Define arrowhead size for yellow arrows
+                    let arrowhead_size = (max_dimension * 0.5).max(1.0); // 50% of object size, minimum 1.0 unit
                     let mcp_arrow_color = Vector4::new(1.0, 1.0, 0.0, 1.0); // Bright yellow, fully opaque
                     let mcp_arrow_length = arrow_length * 0.8; // Slightly shorter than the green arrow
                     let mcp_normalized = mcp_normal_vec.normalize();
@@ -972,7 +930,7 @@ impl HighlightRenderer {
             }
         }
 
-        // Render arrows (green direction indicators)
+        // Render arrows (yellow normal vector indicators)
         if let Some(arrow_buffer) = &self.arrow_vertex_buffer {
             if self.arrow_vertex_count > 0 {
                 render_pass.set_pipeline(&self.arrow_pipeline);
