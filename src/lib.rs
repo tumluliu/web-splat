@@ -504,9 +504,9 @@ impl WindowContext {
             self.highlight_renderer.set_highlighted_objects(response.answer.clone(), &self.wgpu_context.device);
             self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
             
-            // Animate camera to first object with intelligent positioning
-            if let Some((target_center, optimal_camera_pos, object_size)) = self.highlight_renderer.get_first_object_viewing_info() {
-                self.animate_camera_to_optimal_position(target_center, optimal_camera_pos, object_size);
+            // Animate camera to first object with ground-plane-aligned positioning
+            if let Some((target_center, optimal_camera_pos, object_size, ground_normal)) = self.highlight_renderer.get_first_object_viewing_info() {
+                self.animate_camera_to_ground_aligned_position(target_center, optimal_camera_pos, object_size, ground_normal);
             }
         } else {
             // Clear highlights if no objects found
@@ -514,29 +514,29 @@ impl WindowContext {
         }
     }
 
-    fn animate_camera_to_optimal_position(&mut self, target_center: Point3<f32>, optimal_camera_pos: Point3<f32>, object_size: f32) {
-        use cgmath::{Deg, Rad, Rotation3};
+    fn animate_camera_to_ground_aligned_position(&mut self, target_center: Point3<f32>, optimal_camera_pos: Point3<f32>, object_size: f32, ground_normal: Vector3<f32>) {
+        use cgmath::{Deg, Rad};
         
         // Get the current camera position for debugging
         let current_pos = self.splatting_args.camera.position;
         log::info!("Current camera before animation: ({:.3}, {:.3}, {:.3})", current_pos.x, current_pos.y, current_pos.z);
         
-        // Calculate look direction from camera position to target center (object center, not front face)
+        // Calculate look direction from camera position to target center
         let look_direction = (target_center - optimal_camera_pos).normalize();
         
-        // Create a "look at" rotation - camera looks toward the object center
-        let world_up = Vector3::new(0.0, 1.0, 0.0);
-        let rotation = Quaternion::look_at(look_direction, world_up);
+        // Use ground normal as the true "up" vector instead of world Y-up
+        let ground_up = ground_normal;
         
-        // Add slight downward tilt for better viewing angle
-        let right = look_direction.cross(world_up).normalize();
-        let tilt_angle = Rad::from(Deg(15.0)); // 15 degree downward tilt
-        let tilt_rotation = Quaternion::from_axis_angle(right, tilt_angle);
-        let final_rotation = tilt_rotation * rotation;
+        // Create camera rotation aligned with ground plane
+        // The camera will look at the object with the ground plane as reference
+        let rotation = Quaternion::look_at(look_direction, ground_up);
         
-        // Set appropriate FOV based on object size
-        let base_fov = Deg(45.0);
-        let fov_adjustment = (object_size / 10.0).min(1.5).max(0.5); // Scale FOV reasonably
+        // No additional tilt needed - camera is already aligned with ground plane
+        let final_rotation = rotation;
+        
+        // Set appropriate FOV based on object size (slightly wider for better framing)
+        let base_fov = Deg(50.0); // Slightly wider than before
+        let fov_adjustment = (object_size / 8.0).min(1.8).max(0.6); // More adaptive FOV
         let fovx = Rad::from(base_fov * fov_adjustment);
         let fovy = Rad::from(base_fov * fov_adjustment);
         
@@ -544,15 +544,18 @@ impl WindowContext {
         let projection = crate::camera::PerspectiveProjection {
             fovx,
             fovy,
-            znear: (object_size * 0.1).max(0.01),  // Near plane based on object size
-            zfar: (object_size * 10.0).max(100.0),  // Far plane based on object size
+            znear: (object_size * 0.05).max(0.01),  // Closer near plane for better detail
+            zfar: (object_size * 15.0).max(150.0),  // Extended far plane
             fov2view_ratio: fovx.0 / fovy.0,
         };
         
         // Set controller center to the object center for proper orbiting
         self.controller.center = target_center;
         
-        // Create the optimized camera
+        // Update controller's up vector to match ground plane
+        self.controller.up = Some(ground_up);
+        
+        // Create the ground-aligned camera
         let final_camera = PerspectiveCamera::new(
             optimal_camera_pos,
             final_rotation,
@@ -560,19 +563,20 @@ impl WindowContext {
         );
         
         // Log the calculated positioning for debugging
-        log::info!("Intelligent camera positioning:");
+        log::info!("Ground-plane-aligned camera positioning:");
         log::info!("  Object center: ({:.3}, {:.3}, {:.3})", target_center.x, target_center.y, target_center.z);
         log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", optimal_camera_pos.x, optimal_camera_pos.y, optimal_camera_pos.z);
         log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
+        log::info!("  Ground normal (up): ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
         log::info!("  Object size: {:.3}", object_size);
         log::info!("  FOV: {:.1}°", base_fov.0 * fov_adjustment);
         
         // Cancel any existing animation first
         self.animation.take();
         
-        // Animate to the optimal camera position with smooth transition
+        // Animate to the ground-aligned camera position with smooth transition
         self.set_camera(final_camera, Duration::from_millis(1500));
-        log::info!("Camera animating to intelligent front-facing position");
+        log::info!("Camera animating to ground-plane-aligned position");
     }
 
     fn animate_camera_along_path(&mut self, path: crate::chat::ScenePath) {

@@ -961,8 +961,10 @@ impl HighlightRenderer {
         })
     }
 
-    /// Get optimal camera viewing position for the first object based on its orientation
-    pub fn get_first_object_viewing_info(&self) -> Option<(Point3<f32>, Point3<f32>, f32)> {
+    /// Get optimal camera viewing position for the first object based on its orientation and ground plane
+    pub fn get_first_object_viewing_info(
+        &self,
+    ) -> Option<(Point3<f32>, Point3<f32>, f32, Vector3<f32>)> {
         self.highlighted_objects.first().and_then(|obj| {
             if obj.aligned_bbox.len() >= 8 {
                 // Calculate center
@@ -1090,37 +1092,78 @@ impl HighlightRenderer {
                     );
                 }
 
-                // Calculate arrow endpoint (same as in arrow creation)
-                let arrow_length = (max_dimension * 6.5).max(10.0); // Optimal distance for framing
-                let arrow_end = center + front_direction * arrow_length;
+                // Calculate ground plane normal from object's bottom face
+                // Bottom face vertices: 0, 1, 2, 3 (bottom back left, bottom back right, bottom front right, bottom front left)
+                let bottom_v1 = bbox_points[1] - bbox_points[0]; // back edge vector (left to right)
+                let bottom_v2 = bbox_points[3] - bbox_points[0]; // left edge vector (back to front)
+                let ground_normal = bottom_v1.cross(bottom_v2).normalize(); // Ground plane normal (pointing upward)
 
-                // Use the arrow endpoint directly as camera position
-                let camera_position = Point3::from_vec(arrow_end);
-
-                let is_vertical_arrow = front_direction.y.abs() > 0.8;
-                // Apply target compensation based on observed offset patterns
-                // Fine-tuned based on latest View Information results
-                let target_offset = Vector3::new(4.4, -2.0, 3.7); // Refined offset pattern
-                let compensated_target = center + target_offset;
-
-                log::info!("Target-compensated camera positioning:");
+                log::info!("Ground plane analysis:");
                 log::info!(
-                    "  Original object center: ({:.3}, {:.3}, {:.3})",
+                    "  Bottom face edge 1: ({:.3}, {:.3}, {:.3})",
+                    bottom_v1.x,
+                    bottom_v1.y,
+                    bottom_v1.z
+                );
+                log::info!(
+                    "  Bottom face edge 2: ({:.3}, {:.3}, {:.3})",
+                    bottom_v2.x,
+                    bottom_v2.y,
+                    bottom_v2.z
+                );
+                log::info!(
+                    "  Ground normal: ({:.3}, {:.3}, {:.3})",
+                    ground_normal.x,
+                    ground_normal.y,
+                    ground_normal.z
+                );
+
+                // Calculate optimal camera position aligned with ground plane
+                let optimal_distance = (max_dimension * 2.5).max(8.0); // Closer than before for better framing
+
+                // Position camera in front of object, at same "height" relative to ground plane
+                // Use the front direction but adjust height to be parallel with ground
+                let mut camera_direction = front_direction;
+
+                // Project camera direction onto plane perpendicular to ground normal
+                // This makes the camera view parallel to the ground plane
+                let projected_direction =
+                    camera_direction - camera_direction.dot(ground_normal) * ground_normal;
+                if projected_direction.magnitude() > 0.001 {
+                    camera_direction = projected_direction.normalize();
+                } else {
+                    // If projection failed, use a safe horizontal direction
+                    camera_direction = Vector3::new(1.0, 0.0, 0.0);
+                    camera_direction =
+                        camera_direction - camera_direction.dot(ground_normal) * ground_normal;
+                    camera_direction = camera_direction.normalize();
+                }
+
+                // Position camera at optimal distance in the projected direction
+                let camera_position =
+                    Point3::from_vec(center + camera_direction * optimal_distance);
+
+                // Use object center as target (no artificial offset needed with proper alignment)
+                let target_center = Point3::from_vec(center);
+
+                log::info!("Ground-plane-aligned camera positioning:");
+                log::info!(
+                    "  Object center: ({:.3}, {:.3}, {:.3})",
                     center.x,
                     center.y,
                     center.z
                 );
                 log::info!(
-                    "  Compensated target: ({:.3}, {:.3}, {:.3})",
-                    compensated_target.x,
-                    compensated_target.y,
-                    compensated_target.z
+                    "  Ground normal: ({:.3}, {:.3}, {:.3})",
+                    ground_normal.x,
+                    ground_normal.y,
+                    ground_normal.z
                 );
                 log::info!(
-                    "  Arrow direction: ({:.3}, {:.3}, {:.3})",
-                    front_direction.x,
-                    front_direction.y,
-                    front_direction.z
+                    "  Projected camera direction: ({:.3}, {:.3}, {:.3})",
+                    camera_direction.x,
+                    camera_direction.y,
+                    camera_direction.z
                 );
                 log::info!(
                     "  Camera position: ({:.3}, {:.3}, {:.3})",
@@ -1133,11 +1176,7 @@ impl HighlightRenderer {
                     (Vector3::from(camera_position.to_vec()) - center).magnitude()
                 );
 
-                Some((
-                    Point3::from_vec(compensated_target),
-                    camera_position,
-                    max_dimension,
-                ))
+                Some((target_center, camera_position, max_dimension, ground_normal))
             } else {
                 None
             }
