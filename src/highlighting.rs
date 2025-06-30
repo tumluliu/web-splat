@@ -26,6 +26,9 @@ pub struct HighlightRenderer {
     wireframe_vertex_count: u32,
     path_vertex_count: u32,
     arrow_vertex_count: u32,
+
+    // Feature flags
+    show_normal_arrows: bool,
 }
 
 #[repr(C)]
@@ -87,6 +90,8 @@ impl HighlightRenderer {
             wireframe_vertex_count: 0,
             path_vertex_count: 0,
             arrow_vertex_count: 0,
+            // Feature flags - set to false to disable normal arrows by default
+            show_normal_arrows: false,
         }
     }
 
@@ -446,6 +451,20 @@ impl HighlightRenderer {
         self.arrow_vertex_count = 0;
     }
 
+    /// Enable or disable normal vector arrows (yellow arrows showing MCP object orientations)
+    pub fn set_show_normal_arrows(&mut self, show: bool) {
+        self.show_normal_arrows = show;
+        log::info!(
+            "Normal vector arrows {}",
+            if show { "enabled" } else { "disabled" }
+        );
+    }
+
+    /// Check if normal vector arrows are currently enabled
+    pub fn is_showing_normal_arrows(&self) -> bool {
+        self.show_normal_arrows
+    }
+
     fn update_box_instances(&mut self, device: &wgpu::Device) {
         if self.highlighted_objects.is_empty() {
             self.box_instances_buffer = None;
@@ -745,8 +764,8 @@ impl HighlightRenderer {
                     center.z
                 );
 
-                // Add yellow arrow for MCP normal vector if provided
-                if mcp_normal_vec.magnitude() > 0.001 {
+                // Add yellow arrow for MCP normal vector if provided (optional feature)
+                if self.show_normal_arrows && mcp_normal_vec.magnitude() > 0.001 {
                     // Define arrowhead size for yellow arrows
                     let arrowhead_size = (max_dimension * 0.5).max(1.0); // 50% of object size, minimum 1.0 unit
                     let mcp_arrow_color = Vector4::new(1.0, 1.0, 0.0, 1.0); // Bright yellow, fully opaque
@@ -930,7 +949,7 @@ impl HighlightRenderer {
             }
         }
 
-        // Render arrows (yellow normal vector indicators)
+        // Render arrows (yellow normal vector indicators - conditionally enabled)
         if let Some(arrow_buffer) = &self.arrow_vertex_buffer {
             if self.arrow_vertex_count > 0 {
                 render_pass.set_pipeline(&self.arrow_pipeline);
