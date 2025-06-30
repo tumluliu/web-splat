@@ -405,7 +405,9 @@ def handle_query():
                 }
             )
 
-        response = {"answer": answer_objects}
+        # New format: embed objects in a dict with "objects" key, then stringify
+        objects_dict = {"objects": answer_objects}
+        response = {"answer": json.dumps(objects_dict)}
 
         print(f"✅ Sending response: {json.dumps(response, indent=2)}")
         print(f"🔴 REQUEST COMPLETE\n")

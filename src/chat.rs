@@ -254,13 +254,18 @@ pub async fn send_chat_message(
     }
 }
 
-/// Helper function to parse MCP response that handles both direct JSON array and double-encoded string formats
+/// Helper function to parse MCP response that handles multiple formats
 fn parse_mcp_response(
     response_text: &str,
 ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
     #[derive(Debug, Clone, Deserialize)]
     struct RawMcpResponse {
         answer: serde_json::Value,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct ObjectsWrapper {
+        objects: Vec<SceneObject>,
     }
 
     // First, parse the outer JSON structure
@@ -273,10 +278,28 @@ fn parse_mcp_response(
             log::info!("Answer is direct JSON array with {} items", arr.len());
             serde_json::from_value::<Vec<SceneObject>>(serde_json::Value::Array(arr))?
         }
-        // Case 2: answer is a JSON string that needs to be parsed again
+        // Case 2: answer is a JSON string that needs to be parsed
         serde_json::Value::String(json_string) => {
             log::info!("Answer is JSON string, parsing it: {}", json_string);
-            serde_json::from_str::<Vec<SceneObject>>(&json_string)?
+
+            // Try to parse as array first (old format)
+            if let Ok(objects) = serde_json::from_str::<Vec<SceneObject>>(&json_string) {
+                log::info!("Parsed as direct object array with {} items", objects.len());
+                objects
+            }
+            // Try to parse as object with "objects" key (new format)
+            else if let Ok(wrapper) = serde_json::from_str::<ObjectsWrapper>(&json_string) {
+                log::info!(
+                    "Parsed as objects wrapper with {} items",
+                    wrapper.objects.len()
+                );
+                wrapper.objects
+            }
+            // Failed to parse either format
+            else {
+                log::warn!("Failed to parse JSON string as either array or objects wrapper");
+                Vec::new()
+            }
         }
         // Case 3: Unexpected format
         other => {
