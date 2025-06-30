@@ -942,7 +942,42 @@ impl HighlightRenderer {
     }
 
     pub fn get_first_object_position(&self) -> Option<Point3<f32>> {
-        self.highlighted_objects.first().map(|obj| {
+        // Find the biggest object (consistent with get_first_object_viewing_info)
+        let biggest_object = self.highlighted_objects.iter().max_by(|a, b| {
+            let size_a = if a.aligned_bbox.len() >= 8 {
+                let bbox_points_a: Vec<Vector3<f32>> = a
+                    .aligned_bbox
+                    .iter()
+                    .map(|p| Vector3::new(p[0], p[1], p[2]))
+                    .collect();
+                let width_a = (bbox_points_a[2] - bbox_points_a[3]).magnitude();
+                let height_a = (bbox_points_a[7] - bbox_points_a[3]).magnitude();
+                let depth_a = (bbox_points_a[0] - bbox_points_a[3]).magnitude();
+                width_a * height_a * depth_a
+            } else {
+                0.0
+            };
+
+            let size_b = if b.aligned_bbox.len() >= 8 {
+                let bbox_points_b: Vec<Vector3<f32>> = b
+                    .aligned_bbox
+                    .iter()
+                    .map(|p| Vector3::new(p[0], p[1], p[2]))
+                    .collect();
+                let width_b = (bbox_points_b[2] - bbox_points_b[3]).magnitude();
+                let height_b = (bbox_points_b[7] - bbox_points_b[3]).magnitude();
+                let depth_b = (bbox_points_b[0] - bbox_points_b[3]).magnitude();
+                width_b * height_b * depth_b
+            } else {
+                0.0
+            };
+
+            size_a
+                .partial_cmp(&size_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        biggest_object.map(|obj| {
             if obj.aligned_bbox.len() >= 8 {
                 // Calculate center from all 8 points
                 let mut center = [0.0, 0.0, 0.0];
@@ -961,12 +996,53 @@ impl HighlightRenderer {
         })
     }
 
-    /// Get optimal camera viewing position for the first object based on its orientation and ground plane
+    /// Get optimal camera viewing position for the biggest object based on its orientation and ground plane
     pub fn get_first_object_viewing_info(
         &self,
     ) -> Option<(Point3<f32>, Point3<f32>, f32, Vector3<f32>)> {
-        self.highlighted_objects.first().and_then(|obj| {
+        // Find the biggest object among all highlighted objects
+        let biggest_object = self.highlighted_objects.iter().max_by(|a, b| {
+            // Calculate volume/size for each object to find the biggest one
+            let size_a = if a.aligned_bbox.len() >= 8 {
+                let bbox_points_a: Vec<Vector3<f32>> = a
+                    .aligned_bbox
+                    .iter()
+                    .map(|p| Vector3::new(p[0], p[1], p[2]))
+                    .collect();
+                let width_a = (bbox_points_a[2] - bbox_points_a[3]).magnitude();
+                let height_a = (bbox_points_a[7] - bbox_points_a[3]).magnitude();
+                let depth_a = (bbox_points_a[0] - bbox_points_a[3]).magnitude();
+                width_a * height_a * depth_a // Volume approximation
+            } else {
+                0.0
+            };
+
+            let size_b = if b.aligned_bbox.len() >= 8 {
+                let bbox_points_b: Vec<Vector3<f32>> = b
+                    .aligned_bbox
+                    .iter()
+                    .map(|p| Vector3::new(p[0], p[1], p[2]))
+                    .collect();
+                let width_b = (bbox_points_b[2] - bbox_points_b[3]).magnitude();
+                let height_b = (bbox_points_b[7] - bbox_points_b[3]).magnitude();
+                let depth_b = (bbox_points_b[0] - bbox_points_b[3]).magnitude();
+                width_b * height_b * depth_b // Volume approximation
+            } else {
+                0.0
+            };
+
+            size_a
+                .partial_cmp(&size_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        biggest_object.and_then(|obj| {
             if obj.aligned_bbox.len() >= 8 {
+                log::info!(
+                    "🎯 Selected biggest object: '{}' for camera positioning",
+                    obj.name
+                );
+
                 // Calculate center
                 let mut center = Vector3::new(0.0, 0.0, 0.0);
                 for point in &obj.aligned_bbox {

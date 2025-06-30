@@ -482,10 +482,12 @@ impl WindowContext {
         log::info!("Camera position: ({:.3}, {:.3}, {:.3})", camera_pos.x, camera_pos.y, camera_pos.z);
         
         if !response.answer.is_empty() {
-            // Log object bounding boxes for debugging
+            // Log object bounding boxes and sizes for debugging
+            log::info!("📦 Found {} objects, analyzing sizes to select biggest for camera positioning:", response.answer.len());
+            
             for (i, obj) in response.answer.iter().enumerate() {
                 if obj.aligned_bbox.len() >= 8 {
-                    // Calculate center from bounding box
+                    // Calculate center and size from bounding box
                     let mut center = [0.0, 0.0, 0.0];
                     for point in &obj.aligned_bbox {
                         center[0] += point[0];
@@ -495,8 +497,19 @@ impl WindowContext {
                     center[0] /= 8.0;
                     center[1] /= 8.0;
                     center[2] /= 8.0;
-                    log::info!("Object {}: {} at center ({:.3}, {:.3}, {:.3})", 
-                        i + 1, obj.name, center[0], center[1], center[2]);
+                    
+                    // Calculate object volume for size comparison
+                    let bbox_points: Vec<Vector3<f32>> = obj.aligned_bbox
+                        .iter()
+                        .map(|p| Vector3::new(p[0], p[1], p[2]))
+                        .collect();
+                    let width = (bbox_points[2] - bbox_points[3]).magnitude();
+                    let height = (bbox_points[7] - bbox_points[3]).magnitude();
+                    let depth = (bbox_points[0] - bbox_points[3]).magnitude();
+                    let volume = width * height * depth;
+                    
+                    log::info!("  Object {}: '{}' at center ({:.3}, {:.3}, {:.3}) - Volume: {:.3} (W:{:.2} H:{:.2} D:{:.2})", 
+                        i + 1, obj.name, center[0], center[1], center[2], volume, width, height, depth);
                 }
             }
             
