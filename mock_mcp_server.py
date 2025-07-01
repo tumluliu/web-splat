@@ -132,7 +132,8 @@ MOCK_PATHS = {
     "kitchen_to_dining": {
         "waypoints": [
             [0.0, 0.0, 2.5],  # Kitchen counter
-            [1.0, 0.0, 2.0],  # Midpoint
+            [1.5, 0.5, 2.0],  # Midpoint 1
+            [2.0, 0.2, 1.5],  # Midpoint 2
             [2.5, 0.0, 1.0],  # Dining table
         ],
         "description": "Path from kitchen counter to dining table",
@@ -140,7 +141,9 @@ MOCK_PATHS = {
     "entrance_to_sofa": {
         "waypoints": [
             [0.0, 0.0, 0.0],  # Entrance
-            [2.5, 0.0, -1.0],  # Midpoint
+            [1.5, 0.0, -0.5],  # Midpoint 1
+            [3.0, 0.0, -1.0],  # Midpoint 2
+            [4.0, 0.0, -1.5],  # Midpoint 3
             [5.0, 0.0, -2.0],  # Sofa
         ],
         "description": "Path from entrance to living room sofa",
@@ -148,8 +151,10 @@ MOCK_PATHS = {
     "kitchen_to_coffee": {
         "waypoints": [
             [0.0, 0.0, 2.5],  # Kitchen counter
-            [5.0, 1.0, 3.0],  # Midpoint 1
-            [10.0, 2.0, 3.5],  # Midpoint 2
+            [3.0, 0.5, 3.0],  # Midpoint 1
+            [6.0, 1.0, 3.2],  # Midpoint 2
+            [9.0, 1.5, 3.5],  # Midpoint 3
+            [12.0, 2.0, 3.8],  # Midpoint 4
             [15.0, 2.2, 4.0],  # Approaching coffee area
             [18.610, 2.469, 4.476],  # Coffee machine
         ],
@@ -158,12 +163,26 @@ MOCK_PATHS = {
     "dining_to_coffee": {
         "waypoints": [
             [2.5, 0.0, 1.0],  # Dining table
-            [7.0, 1.0, 2.0],  # Midpoint 1
-            [12.0, 1.5, 3.0],  # Midpoint 2
+            [4.5, 0.3, 1.5],  # Midpoint 1
+            [7.0, 1.0, 2.0],  # Midpoint 2
+            [10.0, 1.3, 2.8],  # Midpoint 3
+            [12.0, 1.5, 3.0],  # Midpoint 4
+            [15.0, 2.0, 3.5],  # Midpoint 5
             [16.0, 2.0, 4.0],  # Approaching coffee area
             [18.610, 2.469, 4.476],  # Coffee machine
         ],
         "description": "Path from dining table to coffee machine",
+    },
+    "table_to_anywhere": {
+        "waypoints": [
+            [2.5, 0.0, 1.0],  # Dining table (start)
+            [4.0, 0.2, 0.5],  # Curve around furniture
+            [6.0, 0.5, 0.0],  # Navigate around room
+            [8.0, 0.8, -0.5],  # Continue path
+            [10.0, 1.0, -1.0],  # Approach destination area
+            [12.0, 1.2, -1.5],  # Final approach
+        ],
+        "description": "Scenic path from dining table to destination",
     },
 }
 
@@ -301,12 +320,36 @@ def find_path_by_query(query):
     ):
         return MOCK_PATHS["dining_to_coffee"]  # Default path to coffee machine
 
-    # Generate a random path if no specific match
-    start = [0.0, 0.0, 0.0]
-    end = [random.uniform(-3, 6), 0.0, random.uniform(-3, 4)]
-    mid = [(start[0] + end[0]) / 2, 0.0, (start[2] + end[2]) / 2]
+    # Handle generic table navigation with the new scenic path
+    if "table" in query and any(
+        word in query for word in ["go", "navigate", "path", "route", "to"]
+    ):
+        return MOCK_PATHS["table_to_anywhere"]  # Use scenic path for table navigation
 
-    return {"waypoints": [start, mid, end], "description": "Generated navigation path"}
+    # Generate a longer, more interesting random path if no specific match
+    start = [0.0, 0.0, 0.0]
+    end = [random.uniform(8, 15), random.uniform(0, 2), random.uniform(-2, 4)]
+
+    # Create a curved path with multiple waypoints
+    waypoints = [start]
+    for i in range(1, 5):  # Add 3 intermediate waypoints
+        t = i / 5.0
+        # Use a curved interpolation instead of straight line
+        x = (
+            start[0]
+            + (end[0] - start[0]) * t
+            + random.uniform(-2, 2) * (1 - abs(t - 0.5) * 2)
+        )
+        y = start[1] + (end[1] - start[1]) * t + random.uniform(0, 1) * t
+        z = (
+            start[2]
+            + (end[2] - start[2]) * t
+            + random.uniform(-1, 1) * (1 - abs(t - 0.5) * 2)
+        )
+        waypoints.append([x, y, z])
+    waypoints.append(end)
+
+    return {"waypoints": waypoints, "description": "Generated curved navigation path"}
 
 
 def create_object_from_mock_data(obj):

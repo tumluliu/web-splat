@@ -32,7 +32,7 @@ use winit::{
 
 mod animation;
 mod ui;
-pub use animation::{Animation, NavigationSequence, Sampler, TrackingShot, Transition};
+pub use animation::{AdaptiveNavigationSequence, Animation, NavigationSequence, Sampler, TrackingShot, Transition};
 mod camera;
 pub use camera::{Camera, PerspectiveCamera, PerspectiveProjection};
 mod controller;
@@ -624,7 +624,12 @@ impl WindowContext {
         }
         
         log::info!("Creating complete navigation journey: forward -> pause -> return to start");
-        log::info!("Path has {} waypoints", path.waypoints.len());
+        log::info!("Raw path has {} waypoints", path.waypoints.len());
+        
+        // STEP 1: Preprocess and smooth the path for better animation timing
+        let smoothed_path = self.preprocess_navigation_path(&path.waypoints);
+        log::info!("Smoothed path has {} waypoints (vs {} original)", 
+                   smoothed_path.len(), path.waypoints.len());
         
         // Calculate ground plane normal from the target object's bounding box and normal vector
         // This ensures we respect the scene's actual orientation, not just the path points
@@ -649,9 +654,9 @@ impl WindowContext {
         
         // Phase 1: Smooth transition towards first waypoint with ground plane alignment
         let first_waypoint = Point3::new(
-            path.waypoints[0][0], 
-            path.waypoints[0][1], 
-            path.waypoints[0][2]
+            smoothed_path[0][0], 
+            smoothed_path[0][1], 
+            smoothed_path[0][2]
         );
         
         // Position camera for approach to first waypoint
@@ -713,9 +718,9 @@ impl WindowContext {
             fov2view_ratio: Deg(75.0).0 / Deg(50.0).0,
         };
         
-        // Phase 2: Navigate along the path with ground-plane-aligned orientation (FORWARD JOURNEY)
-        log::info!("🔄 FORWARD JOURNEY: Following path to destination");
-        for (i, waypoint) in path.waypoints.iter().enumerate() {
+        // Phase 2: Navigate along the SMOOTHED path with ground-plane-aligned orientation (FORWARD JOURNEY)
+        log::info!("🔄 FORWARD JOURNEY: Following smoothed path to destination");
+        for (i, waypoint) in smoothed_path.iter().enumerate() {
             let waypoint_pos = Point3::new(waypoint[0], waypoint[1], waypoint[2]);
             
             // Position camera at navigation height above each waypoint for better visibility
@@ -727,21 +732,21 @@ impl WindowContext {
             );
             
             // Calculate raw look direction based on path movement
-            let raw_look_direction = if i < path.waypoints.len() - 1 {
+            let raw_look_direction = if i < smoothed_path.len() - 1 {
                 // Look towards the next waypoint for forward movement
                 let next_waypoint = Point3::new(
-                    path.waypoints[i + 1][0],
-                    path.waypoints[i + 1][1], 
-                    path.waypoints[i + 1][2]
+                    smoothed_path[i + 1][0],
+                    smoothed_path[i + 1][1], 
+                    smoothed_path[i + 1][2]
                 );
                 (next_waypoint - waypoint_pos).normalize()
             } else {
                 // For last waypoint, maintain previous direction
                 if i > 0 {
                     let prev_waypoint = Point3::new(
-                        path.waypoints[i - 1][0],
-                        path.waypoints[i - 1][1], 
-                        path.waypoints[i - 1][2]
+                        smoothed_path[i - 1][0],
+                        smoothed_path[i - 1][1], 
+                        smoothed_path[i - 1][2]
                     );
                     (waypoint_pos - prev_waypoint).normalize()
                 } else {
@@ -787,7 +792,7 @@ impl WindowContext {
         
         // Phase 3: PAUSE AT DESTINATION - Add several identical cameras at the end point for 3 seconds pause
         log::info!("⏸️  PAUSE PHASE: Staying at destination for 3 seconds");
-        let final_waypoint = path.waypoints.last().unwrap();
+        let final_waypoint = smoothed_path.last().unwrap();
         let final_pos = Point3::new(final_waypoint[0], final_waypoint[1], final_waypoint[2]);
         let final_camera_pos = Point3::new(
             final_pos.x,
@@ -841,15 +846,26 @@ impl WindowContext {
             log::info!("    Pause camera {} at destination", i + 1);
         }
         
-        // Phase 4: RETURN JOURNEY - Navigate back to starting position
-        log::info!("🔄 RETURN JOURNEY: Returning to starting position");
+        // Phase 4: FAST RETURN JOURNEY - Navigate back to starting position (FASTER!)
+        log::info!("🔄 RETURN JOURNEY: Fast return to starting position");
         
-        // Create return path by reversing the original waypoints
-        let mut return_waypoints = path.waypoints.clone();
+        // Create return path by reversing the smoothed waypoints and reducing count for speed
+        let mut return_waypoints = smoothed_path.clone();
         return_waypoints.reverse();
         
-        // Add return journey cameras (skip the first waypoint since we're already there)
-        for (i, waypoint) in return_waypoints.iter().skip(1).enumerate() {
+        // Reduce return waypoints for faster journey (skip every other waypoint)
+        let fast_return_waypoints: Vec<[f32; 3]> = return_waypoints
+            .iter()
+            .skip(1) // Skip first waypoint since we're already there
+            .step_by(2) // Take every 2nd waypoint for faster return
+            .cloned()
+            .collect();
+        
+        log::info!("    Fast return: {} waypoints (vs {} forward waypoints)", 
+                   fast_return_waypoints.len(), smoothed_path.len());
+        
+        // Add return journey cameras (fewer waypoints = faster journey)
+        for (i, waypoint) in fast_return_waypoints.iter().enumerate() {
             let waypoint_pos = Point3::new(waypoint[0], waypoint[1], waypoint[2]);
             let camera_pos = Point3::new(
                 waypoint_pos.x,
@@ -858,12 +874,12 @@ impl WindowContext {
             );
             
             // Calculate look direction for return journey
-            let raw_look_direction = if i < return_waypoints.len() - 2 {
+            let raw_look_direction = if i < fast_return_waypoints.len() - 1 {
                 // Look towards the next return waypoint
                 let next_return_waypoint = Point3::new(
-                    return_waypoints[i + 2][0], // +2 because we skipped first waypoint
-                    return_waypoints[i + 2][1],
-                    return_waypoints[i + 2][2]
+                    fast_return_waypoints[i + 1][0],
+                    fast_return_waypoints[i + 1][1],
+                    fast_return_waypoints[i + 1][2]
                 );
                 (next_return_waypoint - waypoint_pos).normalize()
             } else {
@@ -910,18 +926,46 @@ impl WindowContext {
         );
         journey_cameras.push(final_return_camera);
         
-        // Create the complete journey animation with EXACT starting position
-        // Use chain of transitions instead of TrackingShot to avoid spline interpolation issues
-        let seconds_per_camera = 3.0; // Comfortable navigation speed
-        let camera_count = journey_cameras.len();
-        let total_duration = Duration::from_secs_f32((camera_count - 1) as f32 * seconds_per_camera);
+        // Create the complete journey animation with ADAPTIVE TIMING
+        // Use distance-based timing instead of fixed time per camera
+        let forward_speed = 1.5; // Units per second for forward journey (slower for better experience)
+        let return_speed = 3.0;   // Units per second for return journey (2x faster!)
+        let pause_time = 3.0;     // 3 seconds pause
         
-        // Create a custom navigation animation that starts exactly from current position
-        let navigation_animation = NavigationSequence::new(journey_cameras, seconds_per_camera);
+        let forward_cameras = smoothed_path.len() + 2; // +2 for start and approach
+        let pause_cameras = 3;
+        let return_cameras = fast_return_waypoints.len() + 1; // +1 for final return
+        
+        // Calculate timing based on actual distances traveled
+        let forward_distance = self.calculate_path_distance(&smoothed_path);
+        let return_distance = self.calculate_path_distance(&fast_return_waypoints.iter().map(|w| *w).collect::<Vec<_>>());
+        
+        let forward_time = (forward_distance / forward_speed).max(6.0); // Minimum 6 seconds for forward
+        let return_time = (return_distance / return_speed).max(3.0);    // Minimum 3 seconds for return
+        
+        let forward_seconds_per_camera = forward_time / forward_cameras as f32;
+        let return_seconds_per_camera = return_time / return_cameras as f32;
+        
+        log::info!("📏 Journey distances: forward {:.1} units, return {:.1} units", 
+                   forward_distance, return_distance);
+        log::info!("⏱️  Adaptive timing: forward {:.1}s ({:.1}s/camera), return {:.1}s ({:.1}s/camera)", 
+                   forward_time, forward_seconds_per_camera, return_time, return_seconds_per_camera);
+        
+        // Create adaptive navigation sequence with different speeds for different phases
+        let total_duration = Duration::from_secs_f32(forward_time + pause_time + return_time);
+        let adaptive_navigation = AdaptiveNavigationSequence::new(
+            journey_cameras, 
+            forward_cameras, 
+            pause_cameras, 
+            forward_seconds_per_camera,
+            1.0, // 1 second per pause camera
+            return_seconds_per_camera
+        );
+        
         let animation = crate::animation::Animation::new(
             total_duration,
-            false, // NO LOOPING - this is the key change!
-            Box::new(navigation_animation),
+            false, // NO LOOPING
+            Box::new(adaptive_navigation),
         );
         
         // Set controller to use ground plane for consistent controls
@@ -931,13 +975,109 @@ impl WindowContext {
         self.animation.take();
         self.animation = Some((animation, true));
         
-        log::info!("🎬 Started complete navigation journey:");
-        log::info!("  📊 Total cameras: {}", camera_count);
-        log::info!("  ⏱️  Total duration: {:.1}s ({:.1}s per step)", total_duration.as_secs_f32(), seconds_per_camera);
-        log::info!("  🗺️  Journey: Start -> Forward Path -> 3s Pause -> Return Path -> End");
-        log::info!("  🚫 NO LOOPING - animation will stop at the end");
+        log::info!("🎬 Started adaptive navigation journey:");
+        log::info!("  📊 Total cameras: {} (forward: {}, pause: {}, return: {})", 
+                   forward_cameras + pause_cameras + return_cameras, forward_cameras, pause_cameras, return_cameras);
+        log::info!("  ⏱️  Total duration: {:.1}s (forward: {:.1}s + pause: {:.1}s + return: {:.1}s)", 
+                   total_duration.as_secs_f32(), forward_time, pause_time, return_time);
+        log::info!("  🗺️  Journey: Start -> Smoothed Path -> 3s Pause -> Fast Return -> End");
+        log::info!("  🚀 Return journey is 2x faster than forward journey");
         log::info!("Camera will maintain alignment with ground plane normal: ({:.3}, {:.3}, {:.3})", 
                    ground_normal.x, ground_normal.y, ground_normal.z);
+    }
+    
+    /// Preprocess navigation path to create uniform waypoint spacing for better animation timing
+    fn preprocess_navigation_path(&self, raw_waypoints: &[[f32; 3]]) -> Vec<[f32; 3]> {
+        if raw_waypoints.len() < 2 {
+            return raw_waypoints.to_vec();
+        }
+        
+        log::info!("Preprocessing path with {} raw waypoints", raw_waypoints.len());
+        
+        // Step 1: Calculate distances between consecutive waypoints
+        let mut distances = Vec::new();
+        let mut total_distance = 0.0;
+        for i in 0..raw_waypoints.len() - 1 {
+            let p1 = Vector3::new(raw_waypoints[i][0], raw_waypoints[i][1], raw_waypoints[i][2]);
+            let p2 = Vector3::new(raw_waypoints[i + 1][0], raw_waypoints[i + 1][1], raw_waypoints[i + 1][2]);
+            let distance = (p2 - p1).magnitude();
+            distances.push(distance);
+            total_distance += distance;
+        }
+        
+        log::info!("  Total path distance: {:.2} units", total_distance);
+        log::info!("  Distance range: min {:.2}, max {:.2}", 
+                   distances.iter().cloned().fold(f32::INFINITY, f32::min),
+                   distances.iter().cloned().fold(0.0, f32::max));
+        
+        // Step 2: Determine optimal waypoint spacing
+        let min_spacing = 2.0;  // Minimum distance between waypoints
+        let max_spacing = 8.0;  // Maximum distance between waypoints
+        let target_spacing = 4.0; // Ideal distance between waypoints
+        
+        // Step 3: Create new smoothed waypoints with uniform spacing
+        let mut smoothed_waypoints = Vec::new();
+        smoothed_waypoints.push(raw_waypoints[0]); // Always include start point
+        
+        let mut current_distance = 0.0;
+        let mut last_added_distance = 0.0;
+        
+        for i in 0..raw_waypoints.len() - 1 {
+            let segment_distance = distances[i];
+            let segment_start = Vector3::new(raw_waypoints[i][0], raw_waypoints[i][1], raw_waypoints[i][2]);
+            let segment_end = Vector3::new(raw_waypoints[i + 1][0], raw_waypoints[i + 1][1], raw_waypoints[i + 1][2]);
+            let segment_direction = (segment_end - segment_start).normalize();
+            
+            // Add intermediate points if this segment is too long
+            if segment_distance > max_spacing {
+                let num_intermediate = (segment_distance / target_spacing).ceil() as usize;
+                for j in 1..num_intermediate {
+                    let t = j as f32 / num_intermediate as f32;
+                    let intermediate_point = segment_start + (segment_end - segment_start) * t;
+                    
+                    // Check if enough distance has passed since last added point
+                    let distance_since_last = current_distance + segment_distance * t - last_added_distance;
+                    if distance_since_last >= min_spacing {
+                        smoothed_waypoints.push([intermediate_point.x, intermediate_point.y, intermediate_point.z]);
+                        last_added_distance = current_distance + segment_distance * t;
+                    }
+                }
+            }
+            
+            current_distance += segment_distance;
+            
+            // Add the end point of this segment if it's far enough from the last added point
+            let distance_since_last = current_distance - last_added_distance;
+            if distance_since_last >= min_spacing || i == raw_waypoints.len() - 2 {
+                smoothed_waypoints.push(raw_waypoints[i + 1]);
+                last_added_distance = current_distance;
+            }
+        }
+        
+        // Ensure we always include the final destination
+        if smoothed_waypoints.last() != Some(&raw_waypoints[raw_waypoints.len() - 1]) {
+            smoothed_waypoints.push(raw_waypoints[raw_waypoints.len() - 1]);
+        }
+        
+        log::info!("  Smoothed to {} waypoints with target spacing {:.1} units", 
+                   smoothed_waypoints.len(), target_spacing);
+        
+        smoothed_waypoints
+    }
+    
+    /// Calculate total distance of a path for timing calculations
+    fn calculate_path_distance(&self, waypoints: &[[f32; 3]]) -> f32 {
+        if waypoints.len() < 2 {
+            return 0.0;
+        }
+        
+        let mut total_distance = 0.0;
+        for i in 0..waypoints.len() - 1 {
+            let p1 = Vector3::new(waypoints[i][0], waypoints[i][1], waypoints[i][2]);
+            let p2 = Vector3::new(waypoints[i + 1][0], waypoints[i + 1][1], waypoints[i + 1][2]);
+            total_distance += (p2 - p1).magnitude();
+        }
+        total_distance
     }
 
     /// Calculate ground plane normal from target object's bounding box and normal vector

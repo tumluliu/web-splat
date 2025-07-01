@@ -361,3 +361,104 @@ impl Sampler for NavigationSequence {
         from_camera.lerp(&to_camera, smooth_progress)
     }
 }
+
+pub struct AdaptiveNavigationSequence {
+    cameras: Vec<PerspectiveCamera>,
+    forward_cameras: usize,
+    pause_cameras: usize,
+    forward_seconds_per_camera: f32,
+    pause_seconds_per_camera: f32,
+    return_seconds_per_camera: f32,
+}
+
+impl AdaptiveNavigationSequence {
+    pub fn new<C>(
+        cameras: Vec<C>,
+        forward_cameras: usize,
+        pause_cameras: usize,
+        forward_seconds_per_camera: f32,
+        pause_seconds_per_camera: f32,
+        return_seconds_per_camera: f32,
+    ) -> Self
+    where
+        C: Into<PerspectiveCamera>,
+    {
+        let cameras: Vec<PerspectiveCamera> = cameras.into_iter().map(|c| c.into()).collect();
+
+        Self {
+            cameras,
+            forward_cameras,
+            pause_cameras,
+            forward_seconds_per_camera,
+            pause_seconds_per_camera,
+            return_seconds_per_camera,
+        }
+    }
+}
+
+impl Sampler for AdaptiveNavigationSequence {
+    type Sample = PerspectiveCamera;
+
+    fn sample(&self, v: f32) -> Self::Sample {
+        if self.cameras.is_empty() {
+            panic!("AdaptiveNavigationSequence has no cameras");
+        }
+
+        if self.cameras.len() == 1 {
+            return self.cameras[0];
+        }
+
+        // Calculate total duration for each phase
+        let forward_duration = self.forward_cameras as f32 * self.forward_seconds_per_camera;
+        let pause_duration = self.pause_cameras as f32 * self.pause_seconds_per_camera;
+        let return_cameras = self.cameras.len() - self.forward_cameras - self.pause_cameras;
+        let return_duration = return_cameras as f32 * self.return_seconds_per_camera;
+        let total_duration = forward_duration + pause_duration + return_duration;
+
+        // Convert global v (0.0 to 1.0) to absolute time
+        let absolute_time = v * total_duration;
+
+        // Determine which phase we're in and calculate local time and camera indices
+        let (camera_index, local_progress) = if absolute_time <= forward_duration {
+            // FORWARD PHASE
+            let local_time = absolute_time;
+            let camera_index = (local_time / self.forward_seconds_per_camera).floor() as usize;
+            let camera_index = camera_index.min(self.forward_cameras - 1);
+            let local_progress =
+                (local_time % self.forward_seconds_per_camera) / self.forward_seconds_per_camera;
+            (camera_index, local_progress)
+        } else if absolute_time <= forward_duration + pause_duration {
+            // PAUSE PHASE
+            let local_time = absolute_time - forward_duration;
+            let camera_index = self.forward_cameras
+                + (local_time / self.pause_seconds_per_camera).floor() as usize;
+            let camera_index = camera_index.min(self.forward_cameras + self.pause_cameras - 1);
+            let local_progress =
+                (local_time % self.pause_seconds_per_camera) / self.pause_seconds_per_camera;
+            (camera_index, local_progress)
+        } else {
+            // RETURN PHASE
+            let local_time = absolute_time - forward_duration - pause_duration;
+            let camera_index = self.forward_cameras
+                + self.pause_cameras
+                + (local_time / self.return_seconds_per_camera).floor() as usize;
+            let camera_index = camera_index.min(self.cameras.len() - 1);
+            let local_progress =
+                (local_time % self.return_seconds_per_camera) / self.return_seconds_per_camera;
+            (camera_index, local_progress)
+        };
+
+        // Handle edge case where we're at the very end
+        if camera_index >= self.cameras.len() - 1 {
+            return self.cameras[self.cameras.len() - 1];
+        }
+
+        // Interpolate between current camera and next camera
+        let from_camera = &self.cameras[camera_index];
+        let to_camera = &self.cameras[camera_index + 1];
+
+        // Use smooth interpolation within each segment
+        let smooth_progress = smoothstep_local(local_progress);
+        from_camera.lerp(&to_camera, smooth_progress)
+    }
+}
