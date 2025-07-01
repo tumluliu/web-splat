@@ -1,8 +1,8 @@
-#[cfg(target_arch = "wasm32")]
-use web_time::Duration;
 use splines::{Interpolate, Key};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
+#[cfg(target_arch = "wasm32")]
+use web_time::Duration;
 
 use cgmath::{EuclideanSpace, InnerSpace, Point3, Quaternion, Rad, VectorSpace};
 
@@ -301,4 +301,63 @@ fn unroll(rot: [Quaternion<f32>; 4]) -> [Quaternion<f32>; 4] {
         }
     }
     return rot;
+}
+
+pub struct NavigationSequence {
+    cameras: Vec<PerspectiveCamera>,
+    seconds_per_camera: f32,
+}
+
+impl NavigationSequence {
+    pub fn new<C>(cameras: Vec<C>, seconds_per_camera: f32) -> Self
+    where
+        C: Into<PerspectiveCamera>,
+    {
+        let cameras: Vec<PerspectiveCamera> = cameras.into_iter().map(|c| c.into()).collect();
+
+        Self {
+            cameras,
+            seconds_per_camera,
+        }
+    }
+}
+
+// Smooth step function for interpolation
+fn smoothstep_local(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+impl Sampler for NavigationSequence {
+    type Sample = PerspectiveCamera;
+
+    fn sample(&self, v: f32) -> Self::Sample {
+        if self.cameras.is_empty() {
+            panic!("NavigationSequence has no cameras");
+        }
+
+        if self.cameras.len() == 1 {
+            return self.cameras[0];
+        }
+
+        // v ranges from 0.0 to 1.0 over the entire animation
+        // Map it to camera segments
+        let total_segments = (self.cameras.len() - 1) as f32;
+        let scaled_progress = v * total_segments;
+
+        // Clamp to valid range
+        let scaled_progress = scaled_progress.max(0.0).min(total_segments);
+
+        // Find which camera segment we're in
+        let segment_index = (scaled_progress.floor() as usize).min(self.cameras.len() - 2);
+        let segment_progress = scaled_progress - segment_index as f32;
+
+        // Interpolate between the two cameras in this segment
+        let from_camera = self.cameras[segment_index];
+        let to_camera = self.cameras[segment_index + 1];
+
+        // Use smooth interpolation within each segment
+        let smooth_progress = smoothstep_local(segment_progress);
+        from_camera.lerp(&to_camera, smooth_progress)
+    }
 }

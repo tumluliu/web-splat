@@ -32,7 +32,7 @@ use winit::{
 
 mod animation;
 mod ui;
-pub use animation::{Animation, Sampler, TrackingShot, Transition};
+pub use animation::{Animation, NavigationSequence, Sampler, TrackingShot, Transition};
 mod camera;
 pub use camera::{Camera, PerspectiveCamera, PerspectiveProjection};
 mod controller;
@@ -623,7 +623,8 @@ impl WindowContext {
             return;
         }
         
-        log::info!("Creating ground-plane-aligned camera path with {} waypoints", path.waypoints.len());
+        log::info!("Creating complete navigation journey: forward -> pause -> return to start");
+        log::info!("Path has {} waypoints", path.waypoints.len());
         
         // Calculate ground plane normal from the target object's bounding box and normal vector
         // This ensures we respect the scene's actual orientation, not just the path points
@@ -633,17 +634,18 @@ impl WindowContext {
         
         // Start from current camera position
         let current_camera = self.splatting_args.camera.clone();
-        let mut path_cameras = Vec::new();
+        let starting_position = current_camera.position;
+        let mut journey_cameras = Vec::new();
         
         // Add current camera position as starting point
         let start_camera = SceneCamera::from_perspective(
             current_camera,
-            "path_start".to_string(),
+            "journey_start".to_string(),
             0,
             Vector2::new(self.config.width, self.config.height),
             crate::Split::Test,
         );
-        path_cameras.push(start_camera);
+        journey_cameras.push(start_camera);
         
         // Phase 1: Smooth transition towards first waypoint with ground plane alignment
         let first_waypoint = Point3::new(
@@ -690,21 +692,29 @@ impl WindowContext {
         
         let approach_scene_camera = SceneCamera::from_perspective(
             approach_camera,
-            "path_approach".to_string(),
+            "journey_approach".to_string(),
             1,
             Vector2::new(self.config.width, self.config.height),
             crate::Split::Test,
         );
-        path_cameras.push(approach_scene_camera);
+        journey_cameras.push(approach_scene_camera);
         
         log::info!("  Approach: current ({:.2}, {:.2}, {:.2}) -> approach ({:.2}, {:.2}, {:.2}) -> first waypoint ({:.2}, {:.2}, {:.2})",
                    current_pos.x, current_pos.y, current_pos.z,
                    approach_pos.x, approach_pos.y, approach_pos.z,
                    first_waypoint.x, first_waypoint.y, first_waypoint.z);
-        log::info!("  Approach look direction: ({:.3}, {:.3}, {:.3})", 
-                   look_direction.x, look_direction.y, look_direction.z);
         
-        // Phase 2: Navigate along the path with ground-plane-aligned orientation
+        // Define navigation projection for consistent use throughout the journey
+        let nav_projection = crate::camera::PerspectiveProjection {
+            fovx: Rad::from(Deg(75.0)), // Wide FOV for navigation
+            fovy: Rad::from(Deg(50.0)),
+            znear: 0.1,
+            zfar: 500.0,
+            fov2view_ratio: Deg(75.0).0 / Deg(50.0).0,
+        };
+        
+        // Phase 2: Navigate along the path with ground-plane-aligned orientation (FORWARD JOURNEY)
+        log::info!("🔄 FORWARD JOURNEY: Following path to destination");
         for (i, waypoint) in path.waypoints.iter().enumerate() {
             let waypoint_pos = Point3::new(waypoint[0], waypoint[1], waypoint[2]);
             
@@ -752,15 +762,6 @@ impl WindowContext {
             // Use ground plane normal as up vector for stable, aligned rotation (no tilting)
             let rotation = Quaternion::look_at(look_direction, ground_normal);
             
-            // Use a consistent projection for navigation
-            let nav_projection = crate::camera::PerspectiveProjection {
-                fovx: Rad::from(Deg(75.0)), // Wide FOV for navigation
-                fovy: Rad::from(Deg(50.0)),
-                znear: 0.1,
-                zfar: 500.0,
-                fov2view_ratio: Deg(75.0).0 / Deg(50.0).0,
-            };
-            
             // Create camera with navigation projection
             let camera = PerspectiveCamera::new(
                 camera_pos,
@@ -771,42 +772,170 @@ impl WindowContext {
             // Convert to SceneCamera for the animation system
             let scene_camera = SceneCamera::from_perspective(
                 camera,
-                format!("path_waypoint_{}", i),
-                i + 2, // +2 because we have start (0) and approach (1) cameras
+                format!("forward_waypoint_{}", i),
+                journey_cameras.len(), // Use current count for sequential indexing
                 Vector2::new(self.config.width, self.config.height),
                 crate::Split::Test,
             );
             
-            path_cameras.push(scene_camera);
+            journey_cameras.push(scene_camera);
             
-            log::info!("  Waypoint {}: pos ({:.2}, {:.2}, {:.2}) -> cam ({:.2}, {:.2}, {:.2})",
+            log::info!("    Forward waypoint {}: pos ({:.2}, {:.2}, {:.2}) -> cam ({:.2}, {:.2}, {:.2})",
                        i + 1, waypoint_pos.x, waypoint_pos.y, waypoint_pos.z,
                        camera_pos.x, camera_pos.y, camera_pos.z);
-            log::info!("    Raw look: ({:.3}, {:.3}, {:.3}) -> Projected: ({:.3}, {:.3}, {:.3})",
-                       raw_look_direction.x, raw_look_direction.y, raw_look_direction.z,
-                       look_direction.x, look_direction.y, look_direction.z);
         }
         
-        // Create a tracking shot animation along the path
-        let seconds_per_camera = 4.0; // Much slower, more comfortable navigation speed
-        let camera_count = path_cameras.len();
-        let duration = Duration::from_secs_f32(camera_count as f32 * seconds_per_camera);
-        let tracking_shot = crate::animation::TrackingShot::from_cameras(path_cameras);
+        // Phase 3: PAUSE AT DESTINATION - Add several identical cameras at the end point for 3 seconds pause
+        log::info!("⏸️  PAUSE PHASE: Staying at destination for 3 seconds");
+        let final_waypoint = path.waypoints.last().unwrap();
+        let final_pos = Point3::new(final_waypoint[0], final_waypoint[1], final_waypoint[2]);
+        let final_camera_pos = Point3::new(
+            final_pos.x,
+            final_pos.y + 2.0,
+            final_pos.z
+        );
+        
+        // Calculate look direction for pause (look towards the target object center)
+        let mut object_center = Vector3::new(0.0, 0.0, 0.0);
+        for point in &target_object.aligned_bbox {
+            object_center.x += point[0];
+            object_center.y += point[1]; 
+            object_center.z += point[2];
+        }
+        object_center /= 8.0;
+        
+        let pause_look_direction = (object_center - Vector3::from(final_camera_pos.to_vec())).normalize();
+        let projected_pause_look = pause_look_direction - ground_normal * pause_look_direction.dot(ground_normal);
+        let pause_look_final = if projected_pause_look.magnitude() > 0.001 {
+            projected_pause_look.normalize()
+        } else {
+            Vector3::new(1.0, 0.0, 0.0)
+        };
+        
+        let pause_rotation = Quaternion::look_at(pause_look_final, ground_normal);
+        let pause_projection = crate::camera::PerspectiveProjection {
+            fovx: Rad::from(Deg(60.0)), // Slightly narrower FOV for focused view of target
+            fovy: Rad::from(Deg(45.0)),
+            znear: 0.1,
+            zfar: 500.0,
+            fov2view_ratio: Deg(60.0).0 / Deg(45.0).0,
+        };
+        
+        // Add 3 pause cameras (1 second each = 3 seconds total pause)
+        for i in 0..3 {
+            let pause_camera = PerspectiveCamera::new(
+                final_camera_pos,
+                pause_rotation,
+                pause_projection,
+            );
+            
+            let pause_scene_camera = SceneCamera::from_perspective(
+                pause_camera,
+                format!("pause_{}", i + 1),
+                journey_cameras.len(),
+                Vector2::new(self.config.width, self.config.height),
+                crate::Split::Test,
+            );
+            
+            journey_cameras.push(pause_scene_camera);
+            log::info!("    Pause camera {} at destination", i + 1);
+        }
+        
+        // Phase 4: RETURN JOURNEY - Navigate back to starting position
+        log::info!("🔄 RETURN JOURNEY: Returning to starting position");
+        
+        // Create return path by reversing the original waypoints
+        let mut return_waypoints = path.waypoints.clone();
+        return_waypoints.reverse();
+        
+        // Add return journey cameras (skip the first waypoint since we're already there)
+        for (i, waypoint) in return_waypoints.iter().skip(1).enumerate() {
+            let waypoint_pos = Point3::new(waypoint[0], waypoint[1], waypoint[2]);
+            let camera_pos = Point3::new(
+                waypoint_pos.x,
+                waypoint_pos.y + 2.0,
+                waypoint_pos.z
+            );
+            
+            // Calculate look direction for return journey
+            let raw_look_direction = if i < return_waypoints.len() - 2 {
+                // Look towards the next return waypoint
+                let next_return_waypoint = Point3::new(
+                    return_waypoints[i + 2][0], // +2 because we skipped first waypoint
+                    return_waypoints[i + 2][1],
+                    return_waypoints[i + 2][2]
+                );
+                (next_return_waypoint - waypoint_pos).normalize()
+            } else {
+                // For approaching starting position, look towards start
+                (starting_position - waypoint_pos).normalize()
+            };
+            
+            let projected_return_look = raw_look_direction - ground_normal * raw_look_direction.dot(ground_normal);
+            let return_look_direction = if projected_return_look.magnitude() > 0.001 {
+                projected_return_look.normalize()
+            } else {
+                Vector3::new(1.0, 0.0, 0.0)
+            };
+            
+            let return_rotation = Quaternion::look_at(return_look_direction, ground_normal);
+            let return_camera = PerspectiveCamera::new(
+                camera_pos,
+                return_rotation,
+                nav_projection,
+            );
+            
+            let return_scene_camera = SceneCamera::from_perspective(
+                return_camera,
+                format!("return_waypoint_{}", i + 1),
+                journey_cameras.len(),
+                Vector2::new(self.config.width, self.config.height),
+                crate::Split::Test,
+            );
+            
+            journey_cameras.push(return_scene_camera);
+            log::info!("    Return waypoint {}: pos ({:.2}, {:.2}, {:.2}) -> cam ({:.2}, {:.2}, {:.2})",
+                       i + 1, waypoint_pos.x, waypoint_pos.y, waypoint_pos.z,
+                       camera_pos.x, camera_pos.y, camera_pos.z);
+        }
+        
+        // Phase 5: Final approach back to starting position
+        log::info!("🏁 FINAL APPROACH: Returning to original camera position");
+        let final_return_camera = SceneCamera::from_perspective(
+            self.splatting_args.camera.clone(), // Return to exact starting camera
+            "journey_end".to_string(),
+            journey_cameras.len(),
+            Vector2::new(self.config.width, self.config.height),
+            crate::Split::Test,
+        );
+        journey_cameras.push(final_return_camera);
+        
+        // Create the complete journey animation with EXACT starting position
+        // Use chain of transitions instead of TrackingShot to avoid spline interpolation issues
+        let seconds_per_camera = 3.0; // Comfortable navigation speed
+        let camera_count = journey_cameras.len();
+        let total_duration = Duration::from_secs_f32((camera_count - 1) as f32 * seconds_per_camera);
+        
+        // Create a custom navigation animation that starts exactly from current position
+        let navigation_animation = NavigationSequence::new(journey_cameras, seconds_per_camera);
         let animation = crate::animation::Animation::new(
-            duration,
-            true,
-            Box::new(tracking_shot),
+            total_duration,
+            false, // NO LOOPING - this is the key change!
+            Box::new(navigation_animation),
         );
         
         // Set controller to use ground plane for consistent controls
         self.controller.up = Some(ground_normal);
         
-        // Cancel any existing animation and start path navigation
+        // Cancel any existing animation and start the complete journey
         self.animation.take();
         self.animation = Some((animation, true));
         
-        log::info!("🎬 Started ground-plane-aligned navigation: {} cameras over {:.1}s ({:.1}s per step)", 
-                   camera_count, duration.as_secs_f32(), seconds_per_camera);
+        log::info!("🎬 Started complete navigation journey:");
+        log::info!("  📊 Total cameras: {}", camera_count);
+        log::info!("  ⏱️  Total duration: {:.1}s ({:.1}s per step)", total_duration.as_secs_f32(), seconds_per_camera);
+        log::info!("  🗺️  Journey: Start -> Forward Path -> 3s Pause -> Return Path -> End");
+        log::info!("  🚫 NO LOOPING - animation will stop at the end");
         log::info!("Camera will maintain alignment with ground plane normal: ({:.3}, {:.3}, {:.3})", 
                    ground_normal.x, ground_normal.y, ground_normal.z);
     }
