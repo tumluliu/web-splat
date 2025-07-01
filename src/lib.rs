@@ -497,10 +497,10 @@ impl WindowContext {
             self.highlight_renderer.set_highlighted_objects(vec![path_response.object.clone()], &self.wgpu_context.device);
             self.highlight_renderer.set_highlighted_path(Some(scene_path.clone()), &self.wgpu_context.device);
             
-            // Start camera animation along the path
+            // Start camera animation along the path using target object's coordinate system
             log::info!("Starting camera animation along path with {} waypoints to '{}'", 
                        scene_path.waypoints.len(), path_response.object.name);
-            self.animate_camera_along_path(scene_path);
+            self.animate_camera_along_path_with_object(scene_path, &path_response.object);
         }
         // Check if this is an object response (has objects but no paths)
         else if !response.answer.is_empty() {
@@ -615,7 +615,7 @@ impl WindowContext {
         log::info!("Camera animating to ground-plane-aligned position");
     }
 
-    fn animate_camera_along_path(&mut self, path: crate::chat::ScenePath) {
+    fn animate_camera_along_path_with_object(&mut self, path: crate::chat::ScenePath, target_object: &crate::chat::SceneObject) {
         use cgmath::{Deg, Rad};
         
         if path.waypoints.is_empty() {
@@ -625,10 +625,11 @@ impl WindowContext {
         
         log::info!("Creating ground-plane-aligned camera path with {} waypoints", path.waypoints.len());
         
-        // Calculate ground plane normal from the path waypoints
-        let ground_normal = self.calculate_ground_plane_from_path(&path.waypoints);
-        log::info!("Calculated ground plane normal: ({:.3}, {:.3}, {:.3})", 
-                   ground_normal.x, ground_normal.y, ground_normal.z);
+        // Calculate ground plane normal from the target object's bounding box and normal vector
+        // This ensures we respect the scene's actual orientation, not just the path points
+        let ground_normal = self.calculate_ground_plane_from_object(target_object);
+        log::info!("Using target object '{}' for ground plane normal: ({:.3}, {:.3}, {:.3})", 
+                   target_object.name, ground_normal.x, ground_normal.y, ground_normal.z);
         
         // Start from current camera position
         let current_camera = self.splatting_args.camera.clone();
@@ -661,13 +662,14 @@ impl WindowContext {
         let raw_look_direction = (first_waypoint - approach_pos).normalize();
         
         // Project look direction onto ground plane for stability
-        let projected_look_direction = raw_look_direction - raw_look_direction.dot(ground_normal) * ground_normal;
+        let projected_look_direction = raw_look_direction - ground_normal * raw_look_direction.dot(ground_normal);
         let look_direction = if projected_look_direction.magnitude() > 0.001 {
             projected_look_direction.normalize()
         } else {
             // Fallback if projection fails
-            Vector3::new(1.0, 0.0, 0.0) - Vector3::new(1.0, 0.0, 0.0).dot(ground_normal) * ground_normal
-        }.normalize();
+            let fallback = Vector3::new(1.0, 0.0, 0.0);
+            (fallback - ground_normal * fallback.dot(ground_normal)).normalize()
+        };
         
         let approach_rotation = Quaternion::look_at(look_direction, ground_normal);
         
@@ -738,13 +740,13 @@ impl WindowContext {
             };
             
             // Project look direction onto ground plane for stable movement (like object fly-to)
-            let projected_look_direction = raw_look_direction - raw_look_direction.dot(ground_normal) * ground_normal;
+            let projected_look_direction = raw_look_direction - ground_normal * raw_look_direction.dot(ground_normal);
             let look_direction = if projected_look_direction.magnitude() > 0.001 {
                 projected_look_direction.normalize()
             } else {
                 // Fallback if projection fails (e.g., looking straight up/down)
                 let fallback = Vector3::new(1.0, 0.0, 0.0);
-                (fallback - fallback.dot(ground_normal) * ground_normal).normalize()
+                (fallback - ground_normal * fallback.dot(ground_normal)).normalize()
             };
             
             // Use ground plane normal as up vector for stable, aligned rotation (no tilting)
@@ -786,7 +788,7 @@ impl WindowContext {
         }
         
         // Create a tracking shot animation along the path
-        let seconds_per_camera = 2.5; // Slower, more comfortable navigation speed
+        let seconds_per_camera = 4.0; // Much slower, more comfortable navigation speed
         let camera_count = path_cameras.len();
         let duration = Duration::from_secs_f32(camera_count as f32 * seconds_per_camera);
         let tracking_shot = crate::animation::TrackingShot::from_cameras(path_cameras);
@@ -809,7 +811,48 @@ impl WindowContext {
                    ground_normal.x, ground_normal.y, ground_normal.z);
     }
 
-    /// Calculate ground plane normal from path waypoints for stable camera alignment
+    /// Calculate ground plane normal from target object's bounding box and normal vector
+    /// This respects the scene's actual coordinate system, even if it's tilted
+    fn calculate_ground_plane_from_object(&self, target_object: &crate::chat::SceneObject) -> Vector3<f32> {
+        if target_object.aligned_bbox.len() >= 8 {
+            // Use the object's bounding box to calculate the ground plane
+            // Bottom face vertices (indices 0,1,2,3 based on MCP server ordering)
+            let bbox_points: Vec<Vector3<f32>> = target_object.aligned_bbox
+                .iter()
+                .map(|p| Vector3::new(p[0], p[1], p[2]))
+                .collect();
+            
+            // Bottom face: 0=back-left, 1=back-right, 2=front-right, 3=front-left
+            let bottom_v1 = bbox_points[1] - bbox_points[0]; // back edge (left to right)
+            let bottom_v2 = bbox_points[3] - bbox_points[0]; // left edge (back to front)
+            
+            // Cross product gives the normal to the bottom face (ground plane)
+            let ground_normal = bottom_v1.cross(bottom_v2);
+            
+            if ground_normal.magnitude() > 0.001 {
+                let normalized = ground_normal.normalize();
+                // Ensure normal points "upward" (away from ground)
+                if normalized.y < 0.0 {
+                    log::info!("Object ground plane normal: ({:.3}, {:.3}, {:.3}) -> flipped to ({:.3}, {:.3}, {:.3})",
+                               normalized.x, normalized.y, normalized.z, 
+                               -normalized.x, -normalized.y, -normalized.z);
+                    -normalized
+                } else {
+                    log::info!("Object ground plane normal: ({:.3}, {:.3}, {:.3})", 
+                               normalized.x, normalized.y, normalized.z);
+                    normalized
+                }
+            } else {
+                log::warn!("Could not calculate ground plane from object bbox, using world Y-up");
+                Vector3::new(0.0, 1.0, 0.0)
+            }
+        } else {
+            log::warn!("Object has insufficient bbox points ({}), using world Y-up", target_object.aligned_bbox.len());
+            Vector3::new(0.0, 1.0, 0.0)
+        }
+    }
+
+    /// Calculate ground plane normal from path waypoints for stable camera alignment (fallback method)
     fn calculate_ground_plane_from_path(&self, waypoints: &[[f32; 3]]) -> Vector3<f32> {
         if waypoints.len() < 3 {
             // Not enough points to calculate a plane, use world Y-up
