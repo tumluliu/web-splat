@@ -465,7 +465,11 @@ impl WindowContext {
         if !self.pending_chat_responses.is_empty() {
             let responses = std::mem::take(&mut self.pending_chat_responses);
             for (_, response) in responses {
-                let response_text = ui::format_response(&response);
+                // Get current camera position for response formatting
+                let camera_pos = self.splatting_args.camera.position;
+                let current_location = [camera_pos.x, camera_pos.y, camera_pos.z];
+                
+                let response_text = ui::format_response(&response, current_location);
                 self.chat_state.add_message(response_text, false);
                 self.chat_state.set_highlights(response.clone());
                 

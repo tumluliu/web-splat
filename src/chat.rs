@@ -51,6 +51,7 @@ pub struct ChatState {
     pub highlighted_objects: Vec<SceneObject>,
     pub highlighted_path: Option<ScenePath>,
     pub mcp_server_url: String,
+    pub font_size: f32,
     #[cfg(target_arch = "wasm32")]
     pub pending_request_id: Option<String>,
 }
@@ -64,6 +65,7 @@ impl Default for ChatState {
             highlighted_objects: Vec::new(),
             highlighted_path: None,
             mcp_server_url: "http://localhost:8080".to_string(),
+            font_size: 14.0, // Default font size
             #[cfg(target_arch = "wasm32")]
             pending_request_id: None,
         }

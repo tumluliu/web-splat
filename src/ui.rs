@@ -665,10 +665,15 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
         });
 
     // Chat UI - handle separately to avoid borrowing conflicts
-    let (chat_message, new_input, clear_highlights, new_server_url) = chat_ui(state, ctx);
+    let (chat_message, new_input, clear_highlights, new_server_url, new_font_size) = chat_ui(state, ctx);
 
     // Update chat input state
     state.chat_state.current_input = new_input;
+
+    // Update font size if changed
+    if state.chat_state.font_size != new_font_size {
+        state.chat_state.font_size = new_font_size;
+    }
 
     // Update server URL if changed
     if state.chat_state.mcp_server_url != new_server_url {
@@ -801,21 +806,30 @@ fn optional_checkbox(ui: &mut egui::Ui, opt: &mut Option<bool>, default: bool) {
 pub fn chat_ui(
     state: &WindowContext,
     ctx: &egui::Context,
-) -> (Option<String>, String, bool, String) {
+) -> (Option<String>, String, bool, String, f32) {
     let mut message_to_send = None;
     let mut current_input = state.chat_state.current_input.clone();
     let mut clear_highlights = false;
     let mut server_url = state.chat_state.mcp_server_url.clone();
+    let mut font_size = state.chat_state.font_size;
 
     egui::Window::new("💬 3D Scene Chat")
-        .default_width(400.)
+        .default_width(450.)
+        .min_width(350.)
+        .max_width(600.)
         .default_height(500.)
         .resizable(true)
         .show(ctx, |ui| {
             // Chat messages area
-            ui.heading("Ask about the 3D scene");
+            ui.add(egui::Label::new(egui::RichText::new("Ask about the 3D scene").heading().size(font_size + 4.0)));
             ui.separator();
 
+            let num_messages = state.chat_state.messages.len();
+            let last_message_count = ui.memory(|mem| {
+                mem.data.get_temp::<usize>(egui::Id::new("last_message_count")).unwrap_or(0)
+            });
+            let should_scroll = state.chat_state.is_sending || num_messages > last_message_count;
+            
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .max_height(300.)
@@ -829,13 +843,34 @@ pub fn chat_ui(
 
                         let prefix = if message.is_user { "You: " } else { "AI: " };
 
-                        ui.horizontal(|ui| {
-                            ui.colored_label(color, prefix);
-                            ui.label(&message.content);
+                        // Use a vertical layout for better text wrapping
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new(egui::RichText::new(prefix).color(color).size(font_size)));
+                            });
+                            // Use text with wrapping for better readability and custom font size
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&message.content).size(font_size))
+                                    .wrap()
+                            );
                         });
-                        ui.separator();
+                        ui.add_space(5.0); // Add some spacing between messages
+                    }
+                    
+                    // Add an invisible marker at the bottom for auto-scrolling
+                    let scroll_to_bottom_id = egui::Id::new("scroll_to_bottom");
+                    let scroll_response = ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover());
+                    
+                    // Scroll to the bottom marker if we should auto-scroll
+                    if should_scroll && num_messages > 0 {
+                        ui.scroll_to_rect(scroll_response.rect, Some(egui::Align::BOTTOM));
                     }
                 });
+                
+            // Remember the current message count for next frame
+            ui.memory_mut(|mem| {
+                mem.data.insert_temp(egui::Id::new("last_message_count"), num_messages);
+            });
 
             ui.separator();
 
@@ -844,6 +879,7 @@ pub fn chat_ui(
                 let text_edit = egui::TextEdit::singleline(&mut current_input)
                     .hint_text("Ask about objects, locations, or navigation...")
                     .desired_width(ui.available_width() - 80.)
+                    .font(egui::FontId::proportional(font_size))
                     .id(egui::Id::new("chat_input")); // Give it a unique ID
 
                 let response = ui.add_enabled(!state.chat_state.is_sending, text_edit);
@@ -865,23 +901,35 @@ pub fn chat_ui(
 
             if state.chat_state.is_sending {
                 ui.spinner();
-                ui.label("Thinking...");
+                ui.add(egui::Label::new(egui::RichText::new("Thinking...").size(font_size)));
             }
 
             ui.separator();
 
-            // Highlight controls
+            // Highlight controls and font size controls
             ui.horizontal(|ui| {
                 if ui.button("Clear Highlights").clicked() {
                     clear_highlights = true;
                 }
 
-                ui.label(format!(
+                ui.add(egui::Label::new(egui::RichText::new(format!(
                     "Objects: {}",
                     state.chat_state.highlighted_objects.len()
-                ));
+                )).size(font_size - 1.0)));
                 if let Some(_path) = &state.chat_state.highlighted_path {
-                    ui.label("Path: Active");
+                    ui.add(egui::Label::new(egui::RichText::new("Path: Active").size(font_size - 1.0)));
+                }
+                
+                ui.separator();
+                
+                // Font size controls
+                ui.add(egui::Label::new(egui::RichText::new("Font Size:").size(font_size - 1.0)));
+                if ui.button("A-").on_hover_text("Decrease font size").clicked() {
+                    font_size = (font_size - 1.0).max(10.0); // Minimum font size of 10
+                }
+                ui.add(egui::Label::new(egui::RichText::new(format!("{:.0}", font_size)).size(font_size - 1.0)));
+                if ui.button("A+").on_hover_text("Increase font size").clicked() {
+                    font_size = (font_size + 1.0).min(24.0); // Maximum font size of 24
                 }
             });
 
@@ -921,7 +969,7 @@ pub fn chat_ui(
             });
         });
 
-    (message_to_send, current_input, clear_highlights, server_url)
+    (message_to_send, current_input, clear_highlights, server_url, font_size)
 }
 
 /// Create mock response for testing - replace with real async handling
@@ -958,23 +1006,74 @@ pub fn create_mock_response(_message: &str) -> McpResponse {
 }
 
 /// Format MCP response for display
-pub fn format_response(response: &McpResponse) -> String {
+pub fn format_response(response: &McpResponse, current_location: [f32; 3]) -> String {
+    // Handle navigation responses (paths)
+    if !response.paths.is_empty() {
+        let path_responses: Vec<String> = response
+            .paths
+            .iter()
+            .map(|path_response| {
+                let start_pos = if !path_response.path.is_empty() {
+                    path_response.path[0]
+                } else {
+                    [0.0, 0.0, 0.0]
+                };
+                let end_pos = if !path_response.path.is_empty() {
+                    path_response.path[path_response.path.len() - 1]
+                } else {
+                    [0.0, 0.0, 0.0]
+                };
+                
+                format!(
+                    "🗺️ Navigation to {} planned!\n📍 From current position: ({:.1}, {:.1}, {:.1})\n🎯 Path start: ({:.1}, {:.1}, {:.1})\n🏁 Path end: ({:.1}, {:.1}, {:.1})\n📏 Route has {} waypoints",
+                    path_response.object.name,
+                    current_location[0], current_location[1], current_location[2],
+                    start_pos[0], start_pos[1], start_pos[2],
+                    end_pos[0], end_pos[1], end_pos[2],
+                    path_response.path.len()
+                )
+            })
+            .collect();
+        return path_responses.join("\n\n");
+    }
+    
+    // Handle object query responses
     if response.answer.is_empty() {
-        "No objects found".to_string()
-    } else {
         format!(
-            "Found {}: {}",
-            if response.answer.len() == 1 {
-                "object"
-            } else {
-                "objects"
-            },
-            response
-                .answer
-                .iter()
-                .map(|o| o.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "❌ No objects found for your query.\n📍 Searched from position: ({:.1}, {:.1}, {:.1})",
+            current_location[0], current_location[1], current_location[2]
+        )
+    } else {
+        let objects_list = response
+            .answer
+            .iter()
+            .map(|obj| {
+                if obj.aligned_bbox.len() >= 8 {
+                    // Calculate center from bounding box
+                    let mut center = [0.0, 0.0, 0.0];
+                    for point in &obj.aligned_bbox {
+                        center[0] += point[0];
+                        center[1] += point[1];
+                        center[2] += point[2];
+                    }
+                    center[0] /= 8.0;
+                    center[1] /= 8.0;
+                    center[2] /= 8.0;
+                    
+                    format!("{} at ({:.1}, {:.1}, {:.1})", obj.name, center[0], center[1], center[2])
+                } else {
+                    obj.name.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n  • ");
+            
+        format!(
+            "🎯 Found {} {}:\n  • {}\n📍 Query sent from: ({:.1}, {:.1}, {:.1})",
+            response.answer.len(),
+            if response.answer.len() == 1 { "object" } else { "objects" },
+            objects_list,
+            current_location[0], current_location[1], current_location[2]
         )
     }
 }
