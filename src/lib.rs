@@ -481,7 +481,29 @@ impl WindowContext {
         let camera_pos = self.splatting_args.camera.position;
         log::info!("Camera position: ({:.3}, {:.3}, {:.3})", camera_pos.x, camera_pos.y, camera_pos.z);
         
-        if !response.answer.is_empty() {
+        // Check if this is a navigation response (has paths)
+        if !response.paths.is_empty() {
+            log::info!("🗺️ Navigation response detected - {} paths found", response.paths.len());
+            
+            let path_response = &response.paths[0]; // Use first path
+            
+            // Create ScenePath from PathResponse
+            let scene_path = crate::chat::ScenePath {
+                waypoints: path_response.path.clone(),
+                description: Some(format!("Path to {}", path_response.object.name)),
+            };
+            
+            // Set highlighting for both path and target object
+            self.highlight_renderer.set_highlighted_objects(vec![path_response.object.clone()], &self.wgpu_context.device);
+            self.highlight_renderer.set_highlighted_path(Some(scene_path.clone()), &self.wgpu_context.device);
+            
+            // Start camera animation along the path
+            log::info!("Starting camera animation along path with {} waypoints to '{}'", 
+                       scene_path.waypoints.len(), path_response.object.name);
+            self.animate_camera_along_path(scene_path);
+        }
+        // Check if this is an object response (has objects but no paths)
+        else if !response.answer.is_empty() {
             // Log object bounding boxes and sizes for debugging
             log::info!("📦 Found {} objects, analyzing sizes to select biggest for camera positioning:", response.answer.len());
             
@@ -522,7 +544,8 @@ impl WindowContext {
                 self.animate_camera_to_ground_aligned_position(target_center, optimal_camera_pos, object_size, ground_normal);
             }
         } else {
-            // Clear highlights if no objects found
+            // Clear highlights if no objects or paths found
+            log::info!("No objects or paths found in response - clearing highlights");
             self.highlight_renderer.clear_highlights();
         }
     }
@@ -593,11 +616,19 @@ impl WindowContext {
     }
 
     fn animate_camera_along_path(&mut self, path: crate::chat::ScenePath) {
-        use cgmath::{Deg, Rad, Rotation3};
+        use cgmath::{Deg, Rad};
         
         if path.waypoints.is_empty() {
+            log::warn!("Cannot animate along empty path");
             return;
         }
+        
+        log::info!("Creating ground-plane-aligned camera path with {} waypoints", path.waypoints.len());
+        
+        // Calculate ground plane normal from the path waypoints
+        let ground_normal = self.calculate_ground_plane_from_path(&path.waypoints);
+        log::info!("Calculated ground plane normal: ({:.3}, {:.3}, {:.3})", 
+                   ground_normal.x, ground_normal.y, ground_normal.z);
         
         // Start from current camera position
         let current_camera = self.splatting_args.camera.clone();
@@ -613,66 +644,78 @@ impl WindowContext {
         );
         path_cameras.push(start_camera);
         
-        // Phase 1: Elegant transition to first waypoint
-        let _first_waypoint = Point3::new(
+        // Phase 1: Smooth transition towards first waypoint with ground plane alignment
+        let first_waypoint = Point3::new(
             path.waypoints[0][0], 
             path.waypoints[0][1], 
             path.waypoints[0][2]
         );
         
-        // Use exact camera parameters from debug screenshot for first waypoint
-        let first_camera_pos = Point3::new(-4.806, 3.351, -4.564);
+        // Position camera for approach to first waypoint
+        let current_pos = self.splatting_args.camera.position;
+        let approach_distance = 8.0; // Distance to maintain from first waypoint
+        let direction_to_first = (first_waypoint - current_pos).normalize();
+        let approach_pos = first_waypoint - direction_to_first * approach_distance;
         
-        // Use exact rotation from debug screenshot: (-45.0°, -56.3°, -46.5°)
-        let rotation_x = Rad::from(Deg(-45.0));
-        let rotation_y = Rad::from(Deg(-56.3));
-        let rotation_z = Rad::from(Deg(-46.5));
-        let first_rotation = Quaternion::from(cgmath::Euler::new(rotation_x, rotation_y, rotation_z));
+        // Look towards the first waypoint with ground plane alignment
+        let raw_look_direction = (first_waypoint - approach_pos).normalize();
         
-        // Use exact FOV from debug screenshot: (52.3°, 32.9°)
-        let fovx = Rad::from(Deg(52.3));
-        let fovy = Rad::from(Deg(32.9));
+        // Project look direction onto ground plane for stability
+        let projected_look_direction = raw_look_direction - raw_look_direction.dot(ground_normal) * ground_normal;
+        let look_direction = if projected_look_direction.magnitude() > 0.001 {
+            projected_look_direction.normalize()
+        } else {
+            // Fallback if projection fails
+            Vector3::new(1.0, 0.0, 0.0) - Vector3::new(1.0, 0.0, 0.0).dot(ground_normal) * ground_normal
+        }.normalize();
         
-        // Create projection with exact parameters from debug screenshot
-        let first_projection = crate::camera::PerspectiveProjection {
-            fovx,
-            fovy,
-            znear: 0.055,  // From debug screenshot
-            zfar: 55.5,    // From debug screenshot
-            fov2view_ratio: fovx.0 / fovy.0,
+        let approach_rotation = Quaternion::look_at(look_direction, ground_normal);
+        
+        // Use navigation projection for approach
+        let approach_projection = crate::camera::PerspectiveProjection {
+            fovx: Rad::from(Deg(65.0)),
+            fovy: Rad::from(Deg(45.0)),
+            znear: 0.1,
+            zfar: 500.0,
+            fov2view_ratio: Deg(65.0).0 / Deg(45.0).0,
         };
         
-        let first_path_camera = PerspectiveCamera::new(
-            first_camera_pos,
-            first_rotation,
-            first_projection,
+        let approach_camera = PerspectiveCamera::new(
+            approach_pos,
+            approach_rotation,
+            approach_projection,
         );
         
-        // Set view center from debug screenshot
-        self.controller.center = Point3::new(0.111, 3.030, -2.464);
-        
-        let first_scene_camera = SceneCamera::from_perspective(
-            first_path_camera,
+        let approach_scene_camera = SceneCamera::from_perspective(
+            approach_camera,
             "path_approach".to_string(),
             1,
             Vector2::new(self.config.width, self.config.height),
             crate::Split::Test,
         );
-        path_cameras.push(first_scene_camera);
+        path_cameras.push(approach_scene_camera);
         
-        // Phase 2: Navigate along the path with proper directional orientation
+        log::info!("  Approach: current ({:.2}, {:.2}, {:.2}) -> approach ({:.2}, {:.2}, {:.2}) -> first waypoint ({:.2}, {:.2}, {:.2})",
+                   current_pos.x, current_pos.y, current_pos.z,
+                   approach_pos.x, approach_pos.y, approach_pos.z,
+                   first_waypoint.x, first_waypoint.y, first_waypoint.z);
+        log::info!("  Approach look direction: ({:.3}, {:.3}, {:.3})", 
+                   look_direction.x, look_direction.y, look_direction.z);
+        
+        // Phase 2: Navigate along the path with ground-plane-aligned orientation
         for (i, waypoint) in path.waypoints.iter().enumerate() {
             let waypoint_pos = Point3::new(waypoint[0], waypoint[1], waypoint[2]);
             
-            // Position camera at consistent navigation height
+            // Position camera at navigation height above each waypoint for better visibility
+            let camera_height = 2.0; // Navigation height
             let camera_pos = Point3::new(
                 waypoint_pos.x,
-                waypoint_pos.y - 1.0,  // Consistent navigation height
+                waypoint_pos.y + camera_height,
                 waypoint_pos.z
             );
             
-            // Calculate look direction based on path movement
-            let look_direction = if i < path.waypoints.len() - 1 {
+            // Calculate raw look direction based on path movement
+            let raw_look_direction = if i < path.waypoints.len() - 1 {
                 // Look towards the next waypoint for forward movement
                 let next_waypoint = Point3::new(
                     path.waypoints[i + 1][0],
@@ -690,40 +733,62 @@ impl WindowContext {
                     );
                     (waypoint_pos - prev_waypoint).normalize()
                 } else {
-                    Vector3::new(0.0, 0.0, -1.0) // Default forward direction
+                    Vector3::new(1.0, 0.0, 0.0) // Default forward direction
                 }
             };
             
-            // Create rotation that looks in the direction of travel
-            let world_up = Vector3::new(0.0, 1.0, 0.0);
-            let look_at_rotation = Quaternion::look_at(look_direction, world_up);
+            // Project look direction onto ground plane for stable movement (like object fly-to)
+            let projected_look_direction = raw_look_direction - raw_look_direction.dot(ground_normal) * ground_normal;
+            let look_direction = if projected_look_direction.magnitude() > 0.001 {
+                projected_look_direction.normalize()
+            } else {
+                // Fallback if projection fails (e.g., looking straight up/down)
+                let fallback = Vector3::new(1.0, 0.0, 0.0);
+                (fallback - fallback.dot(ground_normal) * ground_normal).normalize()
+            };
             
-            // Add slight downward tilt for better scene viewing
-            let right = look_direction.cross(world_up).normalize();
-            let tilt_rotation = Quaternion::from_axis_angle(right, Rad::from(Deg(15.0)));
-            let rotation = tilt_rotation * look_at_rotation;
+            // Use ground plane normal as up vector for stable, aligned rotation (no tilting)
+            let rotation = Quaternion::look_at(look_direction, ground_normal);
             
-            // Create camera with standard FOV
+            // Use a consistent projection for navigation
+            let nav_projection = crate::camera::PerspectiveProjection {
+                fovx: Rad::from(Deg(75.0)), // Wide FOV for navigation
+                fovy: Rad::from(Deg(50.0)),
+                znear: 0.1,
+                zfar: 500.0,
+                fov2view_ratio: Deg(75.0).0 / Deg(50.0).0,
+            };
+            
+            // Create camera with navigation projection
             let camera = PerspectiveCamera::new(
                 camera_pos,
                 rotation,
-                self.splatting_args.camera.projection.clone(),
+                nav_projection,
             );
             
             // Convert to SceneCamera for the animation system
             let scene_camera = SceneCamera::from_perspective(
                 camera,
                 format!("path_waypoint_{}", i),
-                i,
+                i + 2, // +2 because we have start (0) and approach (1) cameras
                 Vector2::new(self.config.width, self.config.height),
                 crate::Split::Test,
             );
             
             path_cameras.push(scene_camera);
+            
+            log::info!("  Waypoint {}: pos ({:.2}, {:.2}, {:.2}) -> cam ({:.2}, {:.2}, {:.2})",
+                       i + 1, waypoint_pos.x, waypoint_pos.y, waypoint_pos.z,
+                       camera_pos.x, camera_pos.y, camera_pos.z);
+            log::info!("    Raw look: ({:.3}, {:.3}, {:.3}) -> Projected: ({:.3}, {:.3}, {:.3})",
+                       raw_look_direction.x, raw_look_direction.y, raw_look_direction.z,
+                       look_direction.x, look_direction.y, look_direction.z);
         }
         
         // Create a tracking shot animation along the path
-        let duration = Duration::from_secs_f32(path_cameras.len() as f32 * 1.5); // 1.5 seconds per waypoint
+        let seconds_per_camera = 2.5; // Slower, more comfortable navigation speed
+        let camera_count = path_cameras.len();
+        let duration = Duration::from_secs_f32(camera_count as f32 * seconds_per_camera);
         let tracking_shot = crate::animation::TrackingShot::from_cameras(path_cameras);
         let animation = crate::animation::Animation::new(
             duration,
@@ -731,12 +796,52 @@ impl WindowContext {
             Box::new(tracking_shot),
         );
         
+        // Set controller to use ground plane for consistent controls
+        self.controller.up = Some(ground_normal);
+        
         // Cancel any existing animation and start path navigation
         self.animation.take();
         self.animation = Some((animation, true));
         
-        log::info!("Started path navigation animation with {} waypoints over {:.1}s", 
-                   path.waypoints.len(), duration.as_secs_f32());
+        log::info!("🎬 Started ground-plane-aligned navigation: {} cameras over {:.1}s ({:.1}s per step)", 
+                   camera_count, duration.as_secs_f32(), seconds_per_camera);
+        log::info!("Camera will maintain alignment with ground plane normal: ({:.3}, {:.3}, {:.3})", 
+                   ground_normal.x, ground_normal.y, ground_normal.z);
+    }
+
+    /// Calculate ground plane normal from path waypoints for stable camera alignment
+    fn calculate_ground_plane_from_path(&self, waypoints: &[[f32; 3]]) -> Vector3<f32> {
+        if waypoints.len() < 3 {
+            // Not enough points to calculate a plane, use world Y-up
+            return Vector3::new(0.0, 1.0, 0.0);
+        }
+        
+        // Use first three waypoints to define the ground plane
+        let p1 = Vector3::new(waypoints[0][0], waypoints[0][1], waypoints[0][2]);
+        let p2 = Vector3::new(waypoints[1][0], waypoints[1][1], waypoints[1][2]);
+        let p3 = Vector3::new(waypoints[2][0], waypoints[2][1], waypoints[2][2]);
+        
+        // Calculate two vectors in the plane
+        let v1 = p2 - p1;
+        let v2 = p3 - p1;
+        
+        // Cross product gives the normal to the plane
+        let normal = v1.cross(v2);
+        
+        if normal.magnitude() < 0.001 {
+            // Points are collinear, use world Y-up
+            log::info!("Path waypoints are collinear, using world Y-up for ground plane");
+            return Vector3::new(0.0, 1.0, 0.0);
+        }
+        
+        let normalized_normal = normal.normalize();
+        
+        // Ensure the normal points "upward" (positive Y component preferred)
+        if normalized_normal.y < 0.0 {
+            -normalized_normal
+        } else {
+            normalized_normal
+        }
     }
 
     /// returns whether the sceen changed and we need a redraw

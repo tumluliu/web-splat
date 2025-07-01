@@ -23,7 +23,7 @@ print("=" * 80)
 @app.before_request
 def log_request_info():
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"📥 [{timestamp}] INCOMING REQUEST")
     print(f"🔗 URL: {request.url}")
     print(f"📝 Method: {request.method}")
@@ -168,6 +168,27 @@ MOCK_PATHS = {
 }
 
 
+def is_navigation_query(query):
+    """Check if the query is asking for navigation/path information"""
+    query = query.lower()
+    navigation_keywords = [
+        "go",
+        "navigate",
+        "path",
+        "route",
+        "way",
+        "walk",
+        "move",
+        "how to get",
+        "direction",
+        "travel",
+        "journey",
+        "from",
+        "to",
+    ]
+    return any(keyword in query for keyword in navigation_keywords)
+
+
 def find_objects_by_query(query):
     """Find objects based on natural language query"""
     query = query.lower()
@@ -288,6 +309,83 @@ def find_path_by_query(query):
     return {"waypoints": [start, mid, end], "description": "Generated navigation path"}
 
 
+def create_object_from_mock_data(obj):
+    """Convert mock object data to the new aligned_bbox format"""
+    pos = obj["position"]
+    width = float(obj["attributes"].get("width", "2.0"))
+    height = float(obj["attributes"].get("height", "2.0"))
+    depth = float(obj["attributes"].get("depth", "2.0"))
+
+    # Create 8 corners of the bounding box
+    aligned_bbox = [
+        [
+            pos[0] - width / 2,
+            pos[1] - height / 2,
+            pos[2] - depth / 2,
+        ],  # Bottom-front-left
+        [
+            pos[0] + width / 2,
+            pos[1] - height / 2,
+            pos[2] - depth / 2,
+        ],  # Bottom-front-right
+        [
+            pos[0] + width / 2,
+            pos[1] + height / 2,
+            pos[2] - depth / 2,
+        ],  # Top-front-right
+        [pos[0] - width / 2, pos[1] + height / 2, pos[2] - depth / 2],  # Top-front-left
+        [
+            pos[0] - width / 2,
+            pos[1] - height / 2,
+            pos[2] + depth / 2,
+        ],  # Bottom-back-left
+        [
+            pos[0] + width / 2,
+            pos[1] - height / 2,
+            pos[2] + depth / 2,
+        ],  # Bottom-back-right
+        [pos[0] + width / 2, pos[1] + height / 2, pos[2] + depth / 2],  # Top-back-right
+        [pos[0] - width / 2, pos[1] + height / 2, pos[2] + depth / 2],  # Top-back-left
+    ]
+
+    # Generate semantic front face normal vector based on object type
+    normal_vector = [0.0, 0.0, 1.0]  # Default forward direction
+    object_type = obj["attributes"].get("type", "")
+    object_subtype = obj["attributes"].get("subtype", "")
+
+    # Define semantic front directions for different object types
+    if "chair" in obj["name"].lower():
+        normal_vector = [
+            0.0,
+            0.0,
+            -1.0,
+        ]  # Chairs face negative Z (toward where person sits)
+    elif "table" in object_type:
+        normal_vector = [1.0, 0.0, 0.0]  # Tables face positive X (longest side)
+    elif "sofa" in obj["name"].lower():
+        normal_vector = [0.0, 0.0, -1.0]  # Sofas face where people sit
+    elif "counter" in object_type:
+        normal_vector = [0.0, 0.0, -1.0]  # Counters face the user side
+    elif object_subtype == "refrigerator":
+        normal_vector = [1.0, 0.0, 0.0]  # Refrigerator door faces positive X
+    elif object_subtype == "coffee_machine":
+        normal_vector = [
+            0.0,
+            1.0,
+            0.0,
+        ]  # Coffee machine front faces positive Y (upward for testing)
+    else:
+        # For unknown objects, use a reasonable default
+        normal_vector = [1.0, 0.0, 0.0]
+
+    return {
+        "name": obj["name"],
+        "aligned_bbox": aligned_bbox,
+        "normal_vector": normal_vector,
+        "attributes": obj.get("attributes"),
+    }
+
+
 @app.route("/query", methods=["POST"])
 def handle_query():
     """Handle 3D scene understanding queries"""
@@ -310,113 +408,60 @@ def handle_query():
             f"📍 Current location: [{current_location[0]:.3f}, {current_location[1]:.3f}, {current_location[2]:.3f}]"
         )
 
-        # Find objects based on the messages
-        objects = find_objects_by_query(messages)
+        # Check if this is a navigation query
+        if is_navigation_query(messages):
+            print("🗺️  Detected NAVIGATION query - generating path response")
 
-        # Convert objects to new format with aligned_bbox
-        answer_objects = []
-        for obj in objects:
-            # Generate aligned bounding box from position and size
-            pos = obj["position"]
-            width = float(obj["attributes"].get("width", "2.0"))
-            height = float(obj["attributes"].get("height", "2.0"))
-            depth = float(obj["attributes"].get("depth", "2.0"))
+            # Find the target object for navigation
+            target_objects = find_objects_by_query(messages)
+            path_data = find_path_by_query(messages)
 
-            # Create 8 corners of the bounding box
-            aligned_bbox = [
-                [
-                    pos[0] - width / 2,
-                    pos[1] - height / 2,
-                    pos[2] - depth / 2,
-                ],  # Bottom-front-left
-                [
-                    pos[0] + width / 2,
-                    pos[1] - height / 2,
-                    pos[2] - depth / 2,
-                ],  # Bottom-front-right
-                [
-                    pos[0] + width / 2,
-                    pos[1] + height / 2,
-                    pos[2] - depth / 2,
-                ],  # Top-front-right
-                [
-                    pos[0] - width / 2,
-                    pos[1] + height / 2,
-                    pos[2] - depth / 2,
-                ],  # Top-front-left
-                [
-                    pos[0] - width / 2,
-                    pos[1] - height / 2,
-                    pos[2] + depth / 2,
-                ],  # Bottom-back-left
-                [
-                    pos[0] + width / 2,
-                    pos[1] - height / 2,
-                    pos[2] + depth / 2,
-                ],  # Bottom-back-right
-                [
-                    pos[0] + width / 2,
-                    pos[1] + height / 2,
-                    pos[2] + depth / 2,
-                ],  # Top-back-right
-                [
-                    pos[0] - width / 2,
-                    pos[1] + height / 2,
-                    pos[2] + depth / 2,
-                ],  # Top-back-left
-            ]
+            if target_objects and path_data:
+                target_object = target_objects[0]  # Use the first matching object
+                target_object_formatted = create_object_from_mock_data(target_object)
 
-            # Generate semantic front face normal vector based on object type
-            normal_vector = [0.0, 0.0, 1.0]  # Default forward direction
-            object_type = obj["attributes"].get("type", "")
-            object_subtype = obj["attributes"].get("subtype", "")
-
-            # Define semantic front directions for different object types
-            if "chair" in obj["name"].lower():
-                normal_vector = [
-                    0.0,
-                    0.0,
-                    -1.0,
-                ]  # Chairs face negative Z (toward where person sits)
-            elif "table" in object_type:
-                normal_vector = [1.0, 0.0, 0.0]  # Tables face positive X (longest side)
-            elif "sofa" in obj["name"].lower():
-                normal_vector = [0.0, 0.0, -1.0]  # Sofas face where people sit
-            elif "counter" in object_type:
-                normal_vector = [0.0, 0.0, -1.0]  # Counters face the user side
-            elif object_subtype == "refrigerator":
-                normal_vector = [1.0, 0.0, 0.0]  # Refrigerator door faces positive X
-            elif object_subtype == "coffee_machine":
-                normal_vector = [
-                    0.0,
-                    1.0,
-                    0.0,
-                ]  # Coffee machine front faces positive Y (upward for testing)
-            else:
-                # For unknown objects, use a reasonable default
-                normal_vector = [1.0, 0.0, 0.0]
-
-            answer_objects.append(
-                {
-                    "name": obj["name"],
-                    "aligned_bbox": aligned_bbox,
-                    "normal_vector": normal_vector,
-                    "attributes": obj.get("attributes"),
+                # Create path response format
+                path_response = {
+                    "object": target_object_formatted,
+                    "path": path_data["waypoints"],
                 }
-            )
 
-        # New format: embed objects in a dict with "objects" key, then stringify
-        objects_dict = {"objects": answer_objects}
-        response = {"answer": json.dumps(objects_dict)}
+                paths_dict = {"paths": [path_response]}
+                response = {"answer": json.dumps(paths_dict)}
 
-        print(f"✅ Sending response: {json.dumps(response, indent=2)}")
+                print(f"✅ Sending PATH response:")
+                print(f"  Target object: {target_object['name']}")
+                print(f"  Path waypoints: {len(path_data['waypoints'])}")
+                print(f"  Response: {json.dumps(response, indent=2)}")
+            else:
+                print("❌ Could not find target object or path for navigation query")
+                response = {"answer": json.dumps({"paths": []})}
+        else:
+            print("🎯 Detected OBJECT query - generating object response")
+
+            # Find objects based on the messages
+            objects = find_objects_by_query(messages)
+
+            # Convert objects to new format with aligned_bbox
+            answer_objects = []
+            for obj in objects:
+                answer_objects.append(create_object_from_mock_data(obj))
+
+            # New format: embed objects in a dict with "objects" key, then stringify
+            objects_dict = {"objects": answer_objects}
+            response = {"answer": json.dumps(objects_dict)}
+
+            print(f"✅ Sending OBJECT response:")
+            print(f"  Found objects: {len(answer_objects)}")
+            print(f"  Response: {json.dumps(response, indent=2)}")
+
         print(f"🔴 REQUEST COMPLETE\n")
         return jsonify(response)
 
     except Exception as e:
         print(f"❌ Error processing query: {e}")
         print(f"🔴 REQUEST FAILED\n")
-        return jsonify({"answer": []}), 500
+        return jsonify({"answer": json.dumps({"objects": [], "paths": []})}), 500
 
 
 @app.route("/health", methods=["GET"])
@@ -443,6 +488,9 @@ def index():
                 "Find the kitchen counter",
                 "How do I get from the kitchen to the dining table?",
                 "Navigate to the sofa",
+                "Go to the coffee machine",
+                "Path to the refrigerator",
+                "Route from dining table to coffee machine",
             ],
         }
     )

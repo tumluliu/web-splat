@@ -30,8 +30,17 @@ pub struct ScenePath {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PathResponse {
+    pub object: SceneObject,
+    pub path: Vec<[f32; 3]>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpResponse {
+    #[serde(default)]
     pub answer: Vec<SceneObject>,
+    #[serde(default)]
+    pub paths: Vec<PathResponse>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +94,24 @@ impl ChatState {
     pub fn set_highlights(&mut self, response: McpResponse) {
         self.clear_highlights();
         self.highlighted_objects = response.answer;
+
+        // If we have paths, convert the first path to ScenePath format
+        if !response.paths.is_empty() {
+            let path_response = &response.paths[0];
+            self.highlighted_path = Some(ScenePath {
+                waypoints: path_response.path.clone(),
+                description: Some(format!("Path to {}", path_response.object.name)),
+            });
+
+            // Also highlight the target object
+            self.highlighted_objects.push(path_response.object.clone());
+
+            log::info!(
+                "Set highlighted path with {} waypoints to object: {}",
+                path_response.path.len(),
+                path_response.object.name
+            );
+        }
     }
 }
 
@@ -144,7 +171,10 @@ pub async fn send_chat_message(
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
         log::warn!("❌ Server error: {} - {}", status, error_text);
-        Ok(McpResponse { answer: Vec::new() })
+        Ok(McpResponse {
+            answer: Vec::new(),
+            paths: Vec::new(),
+        })
     }
 }
 
@@ -250,7 +280,10 @@ pub async fn send_chat_message(
         };
 
         log::warn!("❌ Server error: {} - {}", resp.status(), error_text);
-        Ok(McpResponse { answer: Vec::new() })
+        Ok(McpResponse {
+            answer: Vec::new(),
+            paths: Vec::new(),
+        })
     }
 }
 
@@ -268,51 +301,70 @@ fn parse_mcp_response(
         objects: Vec<SceneObject>,
     }
 
+    #[derive(Debug, Clone, Deserialize)]
+    struct PathsWrapper {
+        paths: Vec<PathResponse>,
+    }
+
     // First, parse the outer JSON structure
     let raw_response: RawMcpResponse = serde_json::from_str(response_text)?;
     log::info!("Raw answer value: {:?}", raw_response.answer);
 
-    let answer = match raw_response.answer {
-        // Case 1: answer is already a JSON array
+    let (answer, paths) = match raw_response.answer {
+        // Case 1: answer is already a JSON array (legacy object format)
         serde_json::Value::Array(arr) => {
             log::info!("Answer is direct JSON array with {} items", arr.len());
-            serde_json::from_value::<Vec<SceneObject>>(serde_json::Value::Array(arr))?
+            let objects =
+                serde_json::from_value::<Vec<SceneObject>>(serde_json::Value::Array(arr))?;
+            (objects, Vec::new())
         }
         // Case 2: answer is a JSON string that needs to be parsed
         serde_json::Value::String(json_string) => {
             log::info!("Answer is JSON string, parsing it: {}", json_string);
 
-            // Try to parse as array first (old format)
-            if let Ok(objects) = serde_json::from_str::<Vec<SceneObject>>(&json_string) {
-                log::info!("Parsed as direct object array with {} items", objects.len());
-                objects
+            // Try to parse as paths wrapper first (new navigation format)
+            if let Ok(paths_wrapper) = serde_json::from_str::<PathsWrapper>(&json_string) {
+                log::info!(
+                    "Parsed as paths wrapper with {} paths",
+                    paths_wrapper.paths.len()
+                );
+                (Vec::new(), paths_wrapper.paths)
             }
-            // Try to parse as object with "objects" key (new format)
+            // Try to parse as array first (old object format)
+            else if let Ok(objects) = serde_json::from_str::<Vec<SceneObject>>(&json_string) {
+                log::info!("Parsed as direct object array with {} items", objects.len());
+                (objects, Vec::new())
+            }
+            // Try to parse as object with "objects" key (new object format)
             else if let Ok(wrapper) = serde_json::from_str::<ObjectsWrapper>(&json_string) {
                 log::info!(
                     "Parsed as objects wrapper with {} items",
                     wrapper.objects.len()
                 );
-                wrapper.objects
+                (wrapper.objects, Vec::new())
             }
-            // Failed to parse either format
+            // Failed to parse any format
             else {
-                log::warn!("Failed to parse JSON string as either array or objects wrapper");
-                Vec::new()
+                log::warn!("Failed to parse JSON string as objects, paths, or objects wrapper");
+                (Vec::new(), Vec::new())
             }
         }
         // Case 3: Unexpected format
         other => {
             log::warn!("Unexpected answer format: {:?}", other);
-            return Ok(McpResponse { answer: Vec::new() });
+            return Ok(McpResponse {
+                answer: Vec::new(),
+                paths: Vec::new(),
+            });
         }
     };
 
     log::info!(
-        "Successfully parsed {} objects from MCP response",
-        answer.len()
+        "Successfully parsed {} objects and {} paths from MCP response",
+        answer.len(),
+        paths.len()
     );
-    Ok(McpResponse { answer })
+    Ok(McpResponse { answer, paths })
 }
 
 // Global storage for async responses in WASM

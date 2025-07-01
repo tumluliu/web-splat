@@ -438,6 +438,31 @@ impl HighlightRenderer {
         self.update_path_geometry(device);
     }
 
+    /// Set highlighted path from PathResponse format (from MCP navigation queries)
+    pub fn set_highlighted_path_from_response(
+        &mut self,
+        path_response: Option<crate::chat::PathResponse>,
+        device: &wgpu::Device,
+    ) {
+        if let Some(response) = path_response {
+            let waypoint_count = response.path.len();
+            let object_name = response.object.name.clone();
+
+            self.highlighted_path = Some(ScenePath {
+                waypoints: response.path,
+                description: Some(format!("Path to {}", object_name)),
+            });
+            log::info!(
+                "Set highlighted path with {} waypoints to object: {}",
+                waypoint_count,
+                object_name
+            );
+        } else {
+            self.highlighted_path = None;
+        }
+        self.update_path_geometry(device);
+    }
+
     pub fn clear_highlights(&mut self) {
         self.highlighted_objects.clear();
         self.highlighted_path = None;
@@ -890,7 +915,7 @@ impl HighlightRenderer {
             }
 
             let mut vertices = Vec::new();
-            let path_color = Vector4::new(0.9, 0.9, 0.3, 1.0); // Bright light yellow, fully opaque
+            let path_color = Vector4::new(1.0, 0.8, 0.0, 1.0); // Bright orange-yellow, fully opaque for better visibility
 
             // Create line segments between waypoints
             for waypoint in &path.waypoints {

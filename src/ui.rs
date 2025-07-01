@@ -953,6 +953,7 @@ pub fn create_mock_response(_message: &str) -> McpResponse {
 
     McpResponse {
         answer: vec![object],
+        paths: Vec::new(),
     }
 }
 
