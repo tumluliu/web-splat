@@ -947,8 +947,12 @@ impl WindowContext {
         let forward_time = (forward_distance / forward_speed).max(6.0); // Minimum 6 seconds for forward
         let return_time = (return_distance / return_speed).max(3.0);    // Minimum 3 seconds for return
         
-        let forward_seconds_per_camera = forward_time / forward_cameras as f32;
-        let return_seconds_per_camera = return_time / return_cameras as f32;
+        // Ensure we have valid camera counts to avoid division by zero
+        let safe_forward_cameras = forward_cameras.max(1);
+        let safe_return_cameras = return_cameras.max(1);
+        
+        let forward_seconds_per_camera = (forward_time / safe_forward_cameras as f32).max(0.1);
+        let return_seconds_per_camera = (return_time / safe_return_cameras as f32).max(0.1);
         
         log::info!("📏 Journey distances: forward {:.1} units, return {:.1} units", 
                    forward_distance, return_distance);
@@ -956,10 +960,15 @@ impl WindowContext {
                    forward_time, forward_seconds_per_camera, return_time, return_seconds_per_camera);
         
         // Create adaptive navigation sequence with different speeds for different phases
-        let total_duration = Duration::from_secs_f32(forward_time + pause_time + return_time);
+        let total_time = forward_time + pause_time + return_time;
+        let total_duration = Duration::from_secs_f32(total_time.max(1.0)); // Ensure minimum 1 second duration
+        
+        log::info!("🔧 Animation validation: total_time={:.2}s, total_duration={:.2}s", 
+                   total_time, total_duration.as_secs_f32());
+        
         let adaptive_navigation = AdaptiveNavigationSequence::new(
             journey_cameras, 
-            forward_cameras, 
+            safe_forward_cameras, 
             pause_cameras, 
             forward_seconds_per_camera,
             1.0, // 1 second per pause camera

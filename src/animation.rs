@@ -261,7 +261,9 @@ impl<T> Animation<T> {
             }
             None => {
                 if self.looping {
-                    self.time_left = self.duration + self.time_left - dt;
+                    // For looping: calculate how much time overflows and wrap around
+                    let overflow = dt.saturating_sub(self.time_left);
+                    self.time_left = self.duration.saturating_sub(overflow);
                 } else {
                     self.time_left = Duration::ZERO;
                 }
@@ -271,11 +273,15 @@ impl<T> Animation<T> {
     }
 
     pub fn progress(&self) -> f32 {
-        return 1. - self.time_left.as_secs_f32() / self.duration.as_secs_f32();
+        if self.duration.is_zero() {
+            return 1.0; // Animation is complete if duration is zero
+        }
+        return (1. - self.time_left.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0);
     }
 
     pub fn set_progress(&mut self, v: f32) {
-        self.time_left = self.duration.mul_f32(1. - v);
+        let clamped_v = v.clamp(0.0, 1.0);
+        self.time_left = self.duration.mul_f32(1. - clamped_v);
     }
 
     pub fn duration(&self) -> Duration {
@@ -408,15 +414,25 @@ impl Sampler for AdaptiveNavigationSequence {
             return self.cameras[0];
         }
 
-        // Calculate total duration for each phase
+        // Clamp v to valid range to prevent out-of-bounds issues
+        let clamped_v = v.clamp(0.0, 1.0);
+
+        // Calculate total duration for each phase with bounds checking
         let forward_duration = self.forward_cameras as f32 * self.forward_seconds_per_camera;
         let pause_duration = self.pause_cameras as f32 * self.pause_seconds_per_camera;
-        let return_cameras = self.cameras.len() - self.forward_cameras - self.pause_cameras;
+
+        // Ensure return cameras calculation doesn't underflow
+        let return_cameras = if self.forward_cameras + self.pause_cameras <= self.cameras.len() {
+            self.cameras.len() - self.forward_cameras - self.pause_cameras
+        } else {
+            0 // Fallback if camera counts are inconsistent
+        };
+
         let return_duration = return_cameras as f32 * self.return_seconds_per_camera;
-        let total_duration = forward_duration + pause_duration + return_duration;
+        let total_duration = (forward_duration + pause_duration + return_duration).max(0.001); // Avoid division by zero
 
         // Convert global v (0.0 to 1.0) to absolute time
-        let absolute_time = v * total_duration;
+        let absolute_time = clamped_v * total_duration;
 
         // Determine which phase we're in and calculate local time and camera indices
         let (camera_index, local_progress) = if absolute_time <= forward_duration {
