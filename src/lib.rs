@@ -32,7 +32,7 @@ use winit::{
 
 mod animation;
 mod ui;
-pub use animation::{AdaptiveNavigationSequence, Animation, NavigationSequence, Sampler, TrackingShot, Transition};
+pub use animation::{Animation, NavigationSequence, Sampler, TrackingShot, Transition};
 mod camera;
 pub use camera::{Camera, PerspectiveCamera, PerspectiveProjection};
 mod controller;
@@ -627,478 +627,10 @@ impl WindowContext {
             return;
         }
         
-        log::info!("Creating complete navigation journey: forward -> pause -> return to start");
-        log::info!("Raw path has {} waypoints", path.waypoints.len());
+        log::info!("🎬 Starting elegant path animation with {} waypoints", path.waypoints.len());
         
-        // STEP 1: Preprocess and smooth the path for better animation timing
-        let smoothed_path = self.preprocess_navigation_path(&path.waypoints);
-        log::info!("Smoothed path has {} waypoints (vs {} original)", 
-                   smoothed_path.len(), path.waypoints.len());
-        
-        // Calculate ground plane normal from the target object's bounding box and normal vector
-        // This ensures we respect the scene's actual orientation, not just the path points
-        let ground_normal = self.calculate_ground_plane_from_object(target_object);
-        log::info!("Using target object '{}' for ground plane normal: ({:.3}, {:.3}, {:.3})", 
-                   target_object.name, ground_normal.x, ground_normal.y, ground_normal.z);
-        
-        // Start from current camera position
-        let current_camera = self.splatting_args.camera.clone();
-        let starting_position = current_camera.position;
-        let mut journey_cameras = Vec::new();
-        
-        // Add current camera position as starting point
-        let start_camera = SceneCamera::from_perspective(
-            current_camera,
-            "journey_start".to_string(),
-            0,
-            Vector2::new(self.config.width, self.config.height),
-            crate::Split::Test,
-        );
-        journey_cameras.push(start_camera);
-        
-        // Phase 1: Smooth transition towards first waypoint with ground plane alignment
-        let first_waypoint = Point3::new(
-            smoothed_path[0][0], 
-            smoothed_path[0][1], 
-            smoothed_path[0][2]
-        );
-        
-        // Position camera for approach to first waypoint
-        let current_pos = self.splatting_args.camera.position;
-        let approach_distance = 8.0; // Distance to maintain from first waypoint
-        let direction_to_first = (first_waypoint - current_pos).normalize();
-        let approach_pos = first_waypoint - direction_to_first * approach_distance;
-        
-        // Look towards the first waypoint with ground plane alignment
-        let raw_look_direction = (first_waypoint - approach_pos).normalize();
-        
-        // Project look direction onto ground plane for stability
-        let projected_look_direction = raw_look_direction - ground_normal * raw_look_direction.dot(ground_normal);
-        let look_direction = if projected_look_direction.magnitude() > 0.001 {
-            projected_look_direction.normalize()
-        } else {
-            // Fallback if projection fails
-            let fallback = Vector3::new(1.0, 0.0, 0.0);
-            (fallback - ground_normal * fallback.dot(ground_normal)).normalize()
-        };
-        
-        let approach_rotation = Quaternion::look_at(look_direction, ground_normal);
-        
-        // Use navigation projection for approach
-        let approach_projection = crate::camera::PerspectiveProjection {
-            fovx: Rad::from(Deg(65.0)),
-            fovy: Rad::from(Deg(45.0)),
-            znear: 0.1,
-            zfar: 500.0,
-            fov2view_ratio: Deg(65.0).0 / Deg(45.0).0,
-        };
-        
-        let approach_camera = PerspectiveCamera::new(
-            approach_pos,
-            approach_rotation,
-            approach_projection,
-        );
-        
-        let approach_scene_camera = SceneCamera::from_perspective(
-            approach_camera,
-            "journey_approach".to_string(),
-            1,
-            Vector2::new(self.config.width, self.config.height),
-            crate::Split::Test,
-        );
-        journey_cameras.push(approach_scene_camera);
-        
-        log::info!("  Approach: current ({:.2}, {:.2}, {:.2}) -> approach ({:.2}, {:.2}, {:.2}) -> first waypoint ({:.2}, {:.2}, {:.2})",
-                   current_pos.x, current_pos.y, current_pos.z,
-                   approach_pos.x, approach_pos.y, approach_pos.z,
-                   first_waypoint.x, first_waypoint.y, first_waypoint.z);
-        
-        // Define navigation projection for consistent use throughout the journey
-        let nav_projection = crate::camera::PerspectiveProjection {
-            fovx: Rad::from(Deg(75.0)), // Wide FOV for navigation
-            fovy: Rad::from(Deg(50.0)),
-            znear: 0.1,
-            zfar: 500.0,
-            fov2view_ratio: Deg(75.0).0 / Deg(50.0).0,
-        };
-        
-        // Phase 2: Navigate along the SMOOTHED path with ground-plane-aligned orientation (FORWARD JOURNEY)
-        log::info!("🔄 FORWARD JOURNEY: Following smoothed path to destination");
-        for (i, waypoint) in smoothed_path.iter().enumerate() {
-            let waypoint_pos = Point3::new(waypoint[0], waypoint[1], waypoint[2]);
-            
-            // Position camera at navigation height above each waypoint for better visibility
-            let camera_height = 2.0; // Navigation height
-            let camera_pos = Point3::new(
-                waypoint_pos.x,
-                waypoint_pos.y + camera_height,
-                waypoint_pos.z
-            );
-            
-            // Calculate raw look direction based on path movement
-            let raw_look_direction = if i < smoothed_path.len() - 1 {
-                // Look towards the next waypoint for forward movement
-                let next_waypoint = Point3::new(
-                    smoothed_path[i + 1][0],
-                    smoothed_path[i + 1][1], 
-                    smoothed_path[i + 1][2]
-                );
-                (next_waypoint - waypoint_pos).normalize()
-            } else {
-                // For last waypoint, maintain previous direction
-                if i > 0 {
-                    let prev_waypoint = Point3::new(
-                        smoothed_path[i - 1][0],
-                        smoothed_path[i - 1][1], 
-                        smoothed_path[i - 1][2]
-                    );
-                    (waypoint_pos - prev_waypoint).normalize()
-                } else {
-                    Vector3::new(1.0, 0.0, 0.0) // Default forward direction
-                }
-            };
-            
-            // Project look direction onto ground plane for stable movement (like object fly-to)
-            let projected_look_direction = raw_look_direction - ground_normal * raw_look_direction.dot(ground_normal);
-            let look_direction = if projected_look_direction.magnitude() > 0.001 {
-                projected_look_direction.normalize()
-            } else {
-                // Fallback if projection fails (e.g., looking straight up/down)
-                let fallback = Vector3::new(1.0, 0.0, 0.0);
-                (fallback - ground_normal * fallback.dot(ground_normal)).normalize()
-            };
-            
-            // Use ground plane normal as up vector for stable, aligned rotation (no tilting)
-            let rotation = Quaternion::look_at(look_direction, ground_normal);
-            
-            // Create camera with navigation projection
-            let camera = PerspectiveCamera::new(
-                camera_pos,
-                rotation,
-                nav_projection,
-            );
-            
-            // Convert to SceneCamera for the animation system
-            let scene_camera = SceneCamera::from_perspective(
-                camera,
-                format!("forward_waypoint_{}", i),
-                journey_cameras.len(), // Use current count for sequential indexing
-                Vector2::new(self.config.width, self.config.height),
-                crate::Split::Test,
-            );
-            
-            journey_cameras.push(scene_camera);
-            
-            log::info!("    Forward waypoint {}: pos ({:.2}, {:.2}, {:.2}) -> cam ({:.2}, {:.2}, {:.2})",
-                       i + 1, waypoint_pos.x, waypoint_pos.y, waypoint_pos.z,
-                       camera_pos.x, camera_pos.y, camera_pos.z);
-        }
-        
-        // Phase 3: PAUSE AT DESTINATION - Add several identical cameras at the end point for 3 seconds pause
-        log::info!("⏸️  PAUSE PHASE: Staying at destination for 3 seconds");
-        let final_waypoint = smoothed_path.last().unwrap();
-        let final_pos = Point3::new(final_waypoint[0], final_waypoint[1], final_waypoint[2]);
-        let final_camera_pos = Point3::new(
-            final_pos.x,
-            final_pos.y + 2.0,
-            final_pos.z
-        );
-        
-        // Calculate look direction for pause (look towards the target object center)
-        let mut object_center = Vector3::new(0.0, 0.0, 0.0);
-        for point in &target_object.aligned_bbox {
-            object_center.x += point[0];
-            object_center.y += point[1]; 
-            object_center.z += point[2];
-        }
-        object_center /= 8.0;
-        
-        let pause_look_direction = (object_center - Vector3::from(final_camera_pos.to_vec())).normalize();
-        let projected_pause_look = pause_look_direction - ground_normal * pause_look_direction.dot(ground_normal);
-        let pause_look_final = if projected_pause_look.magnitude() > 0.001 {
-            projected_pause_look.normalize()
-        } else {
-            Vector3::new(1.0, 0.0, 0.0)
-        };
-        
-        let pause_rotation = Quaternion::look_at(pause_look_final, ground_normal);
-        let pause_projection = crate::camera::PerspectiveProjection {
-            fovx: Rad::from(Deg(60.0)), // Slightly narrower FOV for focused view of target
-            fovy: Rad::from(Deg(45.0)),
-            znear: 0.1,
-            zfar: 500.0,
-            fov2view_ratio: Deg(60.0).0 / Deg(45.0).0,
-        };
-        
-        // Add 3 pause cameras (1 second each = 3 seconds total pause)
-        for i in 0..3 {
-            let pause_camera = PerspectiveCamera::new(
-                final_camera_pos,
-                pause_rotation,
-                pause_projection,
-            );
-            
-            let pause_scene_camera = SceneCamera::from_perspective(
-                pause_camera,
-                format!("pause_{}", i + 1),
-                journey_cameras.len(),
-                Vector2::new(self.config.width, self.config.height),
-                crate::Split::Test,
-            );
-            
-            journey_cameras.push(pause_scene_camera);
-            log::info!("    Pause camera {} at destination", i + 1);
-        }
-        
-        // Phase 4: FAST RETURN JOURNEY - Navigate back to starting position (FASTER!)
-        log::info!("🔄 RETURN JOURNEY: Fast return to starting position");
-        
-        // Create return path by reversing the smoothed waypoints and reducing count for speed
-        let mut return_waypoints = smoothed_path.clone();
-        return_waypoints.reverse();
-        
-        // Reduce return waypoints for faster journey (skip every other waypoint)
-        let fast_return_waypoints: Vec<[f32; 3]> = return_waypoints
-            .iter()
-            .skip(1) // Skip first waypoint since we're already there
-            .step_by(2) // Take every 2nd waypoint for faster return
-            .cloned()
-            .collect();
-        
-        log::info!("    Fast return: {} waypoints (vs {} forward waypoints)", 
-                   fast_return_waypoints.len(), smoothed_path.len());
-        
-        // Add return journey cameras (fewer waypoints = faster journey)
-        for (i, waypoint) in fast_return_waypoints.iter().enumerate() {
-            let waypoint_pos = Point3::new(waypoint[0], waypoint[1], waypoint[2]);
-            let camera_pos = Point3::new(
-                waypoint_pos.x,
-                waypoint_pos.y + 2.0,
-                waypoint_pos.z
-            );
-            
-            // Calculate look direction for return journey
-            let raw_look_direction = if i < fast_return_waypoints.len() - 1 {
-                // Look towards the next return waypoint
-                let next_return_waypoint = Point3::new(
-                    fast_return_waypoints[i + 1][0],
-                    fast_return_waypoints[i + 1][1],
-                    fast_return_waypoints[i + 1][2]
-                );
-                (next_return_waypoint - waypoint_pos).normalize()
-            } else {
-                // For approaching starting position, look towards start
-                (starting_position - waypoint_pos).normalize()
-            };
-            
-            let projected_return_look = raw_look_direction - ground_normal * raw_look_direction.dot(ground_normal);
-            let return_look_direction = if projected_return_look.magnitude() > 0.001 {
-                projected_return_look.normalize()
-            } else {
-                Vector3::new(1.0, 0.0, 0.0)
-            };
-            
-            let return_rotation = Quaternion::look_at(return_look_direction, ground_normal);
-            let return_camera = PerspectiveCamera::new(
-                camera_pos,
-                return_rotation,
-                nav_projection,
-            );
-            
-            let return_scene_camera = SceneCamera::from_perspective(
-                return_camera,
-                format!("return_waypoint_{}", i + 1),
-                journey_cameras.len(),
-                Vector2::new(self.config.width, self.config.height),
-                crate::Split::Test,
-            );
-            
-            journey_cameras.push(return_scene_camera);
-            log::info!("    Return waypoint {}: pos ({:.2}, {:.2}, {:.2}) -> cam ({:.2}, {:.2}, {:.2})",
-                       i + 1, waypoint_pos.x, waypoint_pos.y, waypoint_pos.z,
-                       camera_pos.x, camera_pos.y, camera_pos.z);
-        }
-        
-        // Phase 5: Final approach back to starting position
-        log::info!("🏁 FINAL APPROACH: Returning to original camera position");
-        let final_return_camera = SceneCamera::from_perspective(
-            self.splatting_args.camera.clone(), // Return to exact starting camera
-            "journey_end".to_string(),
-            journey_cameras.len(),
-            Vector2::new(self.config.width, self.config.height),
-            crate::Split::Test,
-        );
-        journey_cameras.push(final_return_camera);
-        
-        // Create the complete journey animation with ADAPTIVE TIMING
-        // Use distance-based timing instead of fixed time per camera
-        let forward_speed = 1.5; // Units per second for forward journey (slower for better experience)
-        let return_speed = 3.0;   // Units per second for return journey (2x faster!)
-        let pause_time = 3.0;     // 3 seconds pause
-        
-        let forward_cameras = smoothed_path.len() + 2; // +2 for start and approach
-        let pause_cameras = 3;
-        let return_cameras = fast_return_waypoints.len() + 1; // +1 for final return
-        
-        // Calculate timing based on actual distances traveled
-        let forward_distance = self.calculate_path_distance(&smoothed_path);
-        let return_distance = self.calculate_path_distance(&fast_return_waypoints.iter().map(|w| *w).collect::<Vec<_>>());
-        
-        let forward_time = (forward_distance / forward_speed).max(6.0); // Minimum 6 seconds for forward
-        let return_time = (return_distance / return_speed).max(3.0);    // Minimum 3 seconds for return
-        
-        // Ensure we have valid camera counts to avoid division by zero
-        let safe_forward_cameras = forward_cameras.max(1);
-        let safe_return_cameras = return_cameras.max(1);
-        
-        let forward_seconds_per_camera = (forward_time / safe_forward_cameras as f32).max(0.1);
-        let return_seconds_per_camera = (return_time / safe_return_cameras as f32).max(0.1);
-        
-        log::info!("📏 Journey distances: forward {:.1} units, return {:.1} units", 
-                   forward_distance, return_distance);
-        log::info!("⏱️  Adaptive timing: forward {:.1}s ({:.1}s/camera), return {:.1}s ({:.1}s/camera)", 
-                   forward_time, forward_seconds_per_camera, return_time, return_seconds_per_camera);
-        
-        // Create adaptive navigation sequence with different speeds for different phases
-        let total_time = forward_time + pause_time + return_time;
-        let total_duration = Duration::from_secs_f32(total_time.max(1.0)); // Ensure minimum 1 second duration
-        
-        log::info!("🔧 Animation validation: total_time={:.2}s, total_duration={:.2}s", 
-                   total_time, total_duration.as_secs_f32());
-        
-        let adaptive_navigation = AdaptiveNavigationSequence::new(
-            journey_cameras, 
-            safe_forward_cameras, 
-            pause_cameras, 
-            forward_seconds_per_camera,
-            1.0, // 1 second per pause camera
-            return_seconds_per_camera
-        );
-        
-        let animation = crate::animation::Animation::new(
-            total_duration,
-            false, // NO LOOPING
-            Box::new(adaptive_navigation),
-        );
-        
-        // Set controller to use ground plane for consistent controls
-        self.controller.up = Some(ground_normal);
-        
-        // Cancel any existing animation and start the complete journey
-        self.animation.take();
-        self.animation = Some((animation, true));
-        
-        log::info!("🎬 Started adaptive navigation journey:");
-        log::info!("  📊 Total cameras: {} (forward: {}, pause: {}, return: {})", 
-                   forward_cameras + pause_cameras + return_cameras, forward_cameras, pause_cameras, return_cameras);
-        log::info!("  ⏱️  Total duration: {:.1}s (forward: {:.1}s + pause: {:.1}s + return: {:.1}s)", 
-                   total_duration.as_secs_f32(), forward_time, pause_time, return_time);
-        log::info!("  🗺️  Journey: Start -> Smoothed Path -> 3s Pause -> Fast Return -> End");
-        log::info!("  🚀 Return journey is 2x faster than forward journey");
-        log::info!("Camera will maintain alignment with ground plane normal: ({:.3}, {:.3}, {:.3})", 
-                   ground_normal.x, ground_normal.y, ground_normal.z);
-    }
-    
-    /// Preprocess navigation path to create uniform waypoint spacing for better animation timing
-    fn preprocess_navigation_path(&self, raw_waypoints: &[[f32; 3]]) -> Vec<[f32; 3]> {
-        if raw_waypoints.len() < 2 {
-            return raw_waypoints.to_vec();
-        }
-        
-        log::info!("Preprocessing path with {} raw waypoints", raw_waypoints.len());
-        
-        // Step 1: Calculate distances between consecutive waypoints
-        let mut distances = Vec::new();
-        let mut total_distance = 0.0;
-        for i in 0..raw_waypoints.len() - 1 {
-            let p1 = Vector3::new(raw_waypoints[i][0], raw_waypoints[i][1], raw_waypoints[i][2]);
-            let p2 = Vector3::new(raw_waypoints[i + 1][0], raw_waypoints[i + 1][1], raw_waypoints[i + 1][2]);
-            let distance = (p2 - p1).magnitude();
-            distances.push(distance);
-            total_distance += distance;
-        }
-        
-        log::info!("  Total path distance: {:.2} units", total_distance);
-        log::info!("  Distance range: min {:.2}, max {:.2}", 
-                   distances.iter().cloned().fold(f32::INFINITY, f32::min),
-                   distances.iter().cloned().fold(0.0, f32::max));
-        
-        // Step 2: Determine optimal waypoint spacing
-        let min_spacing = 2.0;  // Minimum distance between waypoints
-        let max_spacing = 8.0;  // Maximum distance between waypoints
-        let target_spacing = 4.0; // Ideal distance between waypoints
-        
-        // Step 3: Create new smoothed waypoints with uniform spacing
-        let mut smoothed_waypoints = Vec::new();
-        smoothed_waypoints.push(raw_waypoints[0]); // Always include start point
-        
-        let mut current_distance = 0.0;
-        let mut last_added_distance = 0.0;
-        
-        for i in 0..raw_waypoints.len() - 1 {
-            let segment_distance = distances[i];
-            let segment_start = Vector3::new(raw_waypoints[i][0], raw_waypoints[i][1], raw_waypoints[i][2]);
-            let segment_end = Vector3::new(raw_waypoints[i + 1][0], raw_waypoints[i + 1][1], raw_waypoints[i + 1][2]);
-            let segment_direction = (segment_end - segment_start).normalize();
-            
-            // Add intermediate points if this segment is too long
-            if segment_distance > max_spacing {
-                let num_intermediate = (segment_distance / target_spacing).ceil() as usize;
-                for j in 1..num_intermediate {
-                    let t = j as f32 / num_intermediate as f32;
-                    let intermediate_point = segment_start + (segment_end - segment_start) * t;
-                    
-                    // Check if enough distance has passed since last added point
-                    let distance_since_last = current_distance + segment_distance * t - last_added_distance;
-                    if distance_since_last >= min_spacing {
-                        smoothed_waypoints.push([intermediate_point.x, intermediate_point.y, intermediate_point.z]);
-                        last_added_distance = current_distance + segment_distance * t;
-                    }
-                }
-            }
-            
-            current_distance += segment_distance;
-            
-            // Add the end point of this segment if it's far enough from the last added point
-            let distance_since_last = current_distance - last_added_distance;
-            if distance_since_last >= min_spacing || i == raw_waypoints.len() - 2 {
-                smoothed_waypoints.push(raw_waypoints[i + 1]);
-                last_added_distance = current_distance;
-            }
-        }
-        
-        // Ensure we always include the final destination
-        if smoothed_waypoints.last() != Some(&raw_waypoints[raw_waypoints.len() - 1]) {
-            smoothed_waypoints.push(raw_waypoints[raw_waypoints.len() - 1]);
-        }
-        
-        log::info!("  Smoothed to {} waypoints with target spacing {:.1} units", 
-                   smoothed_waypoints.len(), target_spacing);
-        
-        smoothed_waypoints
-    }
-    
-    /// Calculate total distance of a path for timing calculations
-    fn calculate_path_distance(&self, waypoints: &[[f32; 3]]) -> f32 {
-        if waypoints.len() < 2 {
-            return 0.0;
-        }
-        
-        let mut total_distance = 0.0;
-        for i in 0..waypoints.len() - 1 {
-            let p1 = Vector3::new(waypoints[i][0], waypoints[i][1], waypoints[i][2]);
-            let p2 = Vector3::new(waypoints[i + 1][0], waypoints[i + 1][1], waypoints[i + 1][2]);
-            total_distance += (p2 - p1).magnitude();
-        }
-        total_distance
-    }
-
-    /// Calculate ground plane normal from target object's bounding box and normal vector
-    /// This respects the scene's actual coordinate system, even if it's tilted
-    fn calculate_ground_plane_from_object(&self, target_object: &crate::chat::SceneObject) -> Vector3<f32> {
-        if target_object.aligned_bbox.len() >= 8 {
-            // Use the object's bounding box to calculate the ground plane
-            // Bottom face vertices (indices 0,1,2,3 based on MCP server ordering)
+        // Calculate ground plane normal from target object's aligned_bbox (like highlighting code)
+        let ground_normal = if target_object.aligned_bbox.len() >= 8 {
             let bbox_points: Vec<Vector3<f32>> = target_object.aligned_bbox
                 .iter()
                 .map(|p| Vector3::new(p[0], p[1], p[2]))
@@ -1107,67 +639,116 @@ impl WindowContext {
             // Bottom face: 0=back-left, 1=back-right, 2=front-right, 3=front-left
             let bottom_v1 = bbox_points[1] - bbox_points[0]; // back edge (left to right)
             let bottom_v2 = bbox_points[3] - bbox_points[0]; // left edge (back to front)
-            
-            // Cross product gives the normal to the bottom face (ground plane)
             let ground_normal = bottom_v1.cross(bottom_v2);
             
             if ground_normal.magnitude() > 0.001 {
                 let normalized = ground_normal.normalize();
-                // Ensure normal points "upward" (away from ground)
-                if normalized.y < 0.0 {
-                    log::info!("Object ground plane normal: ({:.3}, {:.3}, {:.3}) -> flipped to ({:.3}, {:.3}, {:.3})",
-                               normalized.x, normalized.y, normalized.z, 
-                               -normalized.x, -normalized.y, -normalized.z);
-                    -normalized
-                } else {
-                    log::info!("Object ground plane normal: ({:.3}, {:.3}, {:.3})", 
-                               normalized.x, normalized.y, normalized.z);
-                    normalized
-                }
+                if normalized.y < 0.0 { -normalized } else { normalized }
             } else {
-                log::warn!("Could not calculate ground plane from object bbox, using world Y-up");
                 Vector3::new(0.0, 1.0, 0.0)
             }
         } else {
-            log::warn!("Object has insufficient bbox points ({}), using world Y-up", target_object.aligned_bbox.len());
             Vector3::new(0.0, 1.0, 0.0)
+        };
+        
+        log::info!("Ground plane normal: ({:.3}, {:.3}, {:.3})", 
+                   ground_normal.x, ground_normal.y, ground_normal.z);
+        
+        // Calculate object center from aligned_bbox
+        let object_center = {
+            let mut center = Vector3::new(0.0, 0.0, 0.0);
+            for point in &target_object.aligned_bbox {
+                center.x += point[0];
+                center.y += point[1];
+                center.z += point[2];
+            }
+            center / 8.0
+        };
+        
+        // Calculate camera height relative to ground plane (not just Y offset)
+        let camera_height_above_ground = 2.5; // Height above ground plane
+        
+        let mut cameras = Vec::new();
+        
+        // Create cameras for each waypoint
+        for (i, waypoint) in path.waypoints.iter().enumerate() {
+            let waypoint_pos = Vector3::new(waypoint[0], waypoint[1], waypoint[2]);
+            
+            // Calculate proper camera position at consistent height above ground plane
+            let camera_pos = waypoint_pos + ground_normal * camera_height_above_ground;
+            
+            // Calculate forward direction (look direction)
+            let forward_direction = if i < path.waypoints.len() - 1 {
+                // Look towards next waypoint
+                let next_waypoint = Vector3::new(
+                    path.waypoints[i + 1][0],
+                    path.waypoints[i + 1][1],
+                    path.waypoints[i + 1][2]
+                );
+                (next_waypoint - waypoint_pos).normalize()
+            } else {
+                // For last waypoint, look towards object center
+                (object_center - waypoint_pos).normalize()
+            };
+            
+            // Project forward direction onto ground plane to keep camera parallel
+            let projected_forward = forward_direction - forward_direction.dot(ground_normal) * ground_normal;
+            let look_direction = if projected_forward.magnitude() > 0.001 {
+                projected_forward.normalize()
+            } else {
+                // Fallback if projection fails
+                Vector3::new(1.0, 0.0, 0.0)
+            };
+            
+            // Create camera rotation using ground plane normal as up vector
+            let rotation = Quaternion::look_at(look_direction, ground_normal);
+            
+            // Use consistent navigation projection
+            let projection = crate::camera::PerspectiveProjection {
+                fovx: Rad::from(Deg(70.0)),
+                fovy: Rad::from(Deg(50.0)),
+                znear: 0.1,
+                zfar: 500.0,
+                fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
+            };
+            
+            let camera = PerspectiveCamera::new(
+                Point3::from_vec(camera_pos),
+                rotation,
+                projection,
+            );
+            
+            cameras.push(camera);
+            
+            log::info!("  Waypoint {}: ground ({:.2}, {:.2}, {:.2}) -> camera ({:.2}, {:.2}, {:.2})",
+                       i + 1, waypoint_pos.x, waypoint_pos.y, waypoint_pos.z,
+                       camera_pos.x, camera_pos.y, camera_pos.z);
         }
+        
+        // Set controller to use ground plane for consistent controls
+        self.controller.up = Some(ground_normal);
+        
+        // Create simple navigation sequence
+        let seconds_per_waypoint = 1.0; // 1 second per waypoint for smooth motion
+        let total_duration = Duration::from_secs_f32(cameras.len() as f32 * seconds_per_waypoint);
+        
+        let navigation = NavigationSequence::new(cameras, seconds_per_waypoint);
+        let animation = crate::animation::Animation::new(
+            total_duration,
+            false, // No looping
+            Box::new(navigation),
+        );
+        
+        // Start the animation
+        self.animation.take();
+        self.animation = Some((animation, true));
+        
+        log::info!("✅ Started elegant path animation: {} waypoints, {:.1}s duration", 
+                   path.waypoints.len(), total_duration.as_secs_f32());
+        log::info!("   Camera maintains {:.1} units height above ground plane", camera_height_above_ground);
     }
+    
 
-    /// Calculate ground plane normal from path waypoints for stable camera alignment (fallback method)
-    fn calculate_ground_plane_from_path(&self, waypoints: &[[f32; 3]]) -> Vector3<f32> {
-        if waypoints.len() < 3 {
-            // Not enough points to calculate a plane, use world Y-up
-            return Vector3::new(0.0, 1.0, 0.0);
-        }
-        
-        // Use first three waypoints to define the ground plane
-        let p1 = Vector3::new(waypoints[0][0], waypoints[0][1], waypoints[0][2]);
-        let p2 = Vector3::new(waypoints[1][0], waypoints[1][1], waypoints[1][2]);
-        let p3 = Vector3::new(waypoints[2][0], waypoints[2][1], waypoints[2][2]);
-        
-        // Calculate two vectors in the plane
-        let v1 = p2 - p1;
-        let v2 = p3 - p1;
-        
-        // Cross product gives the normal to the plane
-        let normal = v1.cross(v2);
-        
-        if normal.magnitude() < 0.001 {
-            // Points are collinear, use world Y-up
-            log::info!("Path waypoints are collinear, using world Y-up for ground plane");
-            return Vector3::new(0.0, 1.0, 0.0);
-        }
-        
-        let normalized_normal = normal.normalize();
-        
-        // Ensure the normal points "upward" (positive Y component preferred)
-        if normalized_normal.y < 0.0 {
-            -normalized_normal
-        } else {
-            normalized_normal
-        }
-    }
 
     /// returns whether the sceen changed and we need a redraw
     fn update(&mut self, dt: Duration)  {
