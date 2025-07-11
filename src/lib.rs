@@ -635,7 +635,7 @@ impl WindowContext {
                 .iter()
                 .map(|p| Vector3::new(p[0], p[1], p[2]))
                 .collect();
-            
+        
             // Bottom face: 0=back-left, 1=back-right, 2=front-right, 3=front-left
             let bottom_v1 = bbox_points[1] - bbox_points[0]; // back edge (left to right)
             let bottom_v2 = bbox_points[3] - bbox_points[0]; // left edge (back to front)
@@ -644,7 +644,7 @@ impl WindowContext {
             if ground_normal.magnitude() > 0.001 {
                 let normalized = ground_normal.normalize();
                 if normalized.y < 0.0 { -normalized } else { normalized }
-            } else {
+        } else {
                 Vector3::new(0.0, 1.0, 0.0)
             }
         } else {
@@ -665,8 +665,8 @@ impl WindowContext {
             center / 8.0
         };
         
-        // Calculate camera height relative to ground plane (not just Y offset)
-        let camera_height_above_ground = 2.5; // Height above ground plane
+                // Calculate camera height relative to ground plane (increased for better visibility)
+        let camera_height_above_ground = 4.0; // Increased height above ground plane
         
         let mut cameras = Vec::new();
         
@@ -674,43 +674,89 @@ impl WindowContext {
         for (i, waypoint) in path.waypoints.iter().enumerate() {
             let waypoint_pos = Vector3::new(waypoint[0], waypoint[1], waypoint[2]);
             
-            // Calculate proper camera position at consistent height above ground plane
-            let camera_pos = waypoint_pos + ground_normal * camera_height_above_ground;
-            
-            // Calculate forward direction (look direction)
-            let forward_direction = if i < path.waypoints.len() - 1 {
+            let (camera_pos, look_direction, projection) = if i == path.waypoints.len() - 1 {
+                // For final waypoint, use optimal object viewing position (same as object search)
+                if let Some((target_center, optimal_camera_pos, object_size, _)) = self.highlight_renderer.get_first_object_viewing_info() {
+                    let look_dir = (target_center - optimal_camera_pos).normalize();
+                    
+                    // Project look direction onto ground plane
+                    let projected_look = look_dir - look_dir.dot(ground_normal) * ground_normal;
+                    let final_look_direction = if projected_look.magnitude() > 0.001 {
+                        projected_look.normalize()
+                    } else {
+                        Vector3::new(1.0, 0.0, 0.0)
+                    };
+                    
+                    // Use object-specific projection for better framing
+                    let base_fov = Deg(50.0);
+                    let fov_adjustment = (object_size / 8.0).min(1.8).max(0.6);
+                    let fovx = Rad::from(base_fov * fov_adjustment);
+                    let fovy = Rad::from(base_fov * fov_adjustment);
+                    
+                    let obj_projection = crate::camera::PerspectiveProjection {
+                        fovx,
+                        fovy,
+                        znear: (object_size * 0.05).max(0.01),
+                        zfar: (object_size * 15.0).max(150.0),
+                        fov2view_ratio: fovx.0 / fovy.0,
+                    };
+                    
+                    log::info!("  Final waypoint: using optimal object viewing position");
+                    (Vector3::from(optimal_camera_pos.to_vec()), final_look_direction, obj_projection)
+                } else {
+                    // Fallback if no optimal position available
+                    let camera_pos = waypoint_pos + ground_normal * camera_height_above_ground;
+                    let look_dir = (object_center - waypoint_pos).normalize();
+                    let projected_look = look_dir - look_dir.dot(ground_normal) * ground_normal;
+                    let final_look_direction = if projected_look.magnitude() > 0.001 {
+                        projected_look.normalize()
+                    } else {
+                        Vector3::new(1.0, 0.0, 0.0)
+                    };
+                    
+                    let nav_projection = crate::camera::PerspectiveProjection {
+                        fovx: Rad::from(Deg(70.0)),
+                        fovy: Rad::from(Deg(50.0)),
+                        znear: 0.1,
+                        zfar: 500.0,
+                        fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
+                    };
+                    
+                    (camera_pos, final_look_direction, nav_projection)
+                }
+            } else {
+                // For regular waypoints, position at height above ground plane
+                let camera_pos = waypoint_pos + ground_normal * camera_height_above_ground;
+                
                 // Look towards next waypoint
                 let next_waypoint = Vector3::new(
                     path.waypoints[i + 1][0],
                     path.waypoints[i + 1][1],
                     path.waypoints[i + 1][2]
                 );
-                (next_waypoint - waypoint_pos).normalize()
-            } else {
-                // For last waypoint, look towards object center
-                (object_center - waypoint_pos).normalize()
-            };
-            
-            // Project forward direction onto ground plane to keep camera parallel
-            let projected_forward = forward_direction - forward_direction.dot(ground_normal) * ground_normal;
-            let look_direction = if projected_forward.magnitude() > 0.001 {
-                projected_forward.normalize()
-            } else {
-                // Fallback if projection fails
-                Vector3::new(1.0, 0.0, 0.0)
+                let forward_direction = (next_waypoint - waypoint_pos).normalize();
+                
+                // Project forward direction onto ground plane to keep camera parallel
+                let projected_forward = forward_direction - forward_direction.dot(ground_normal) * ground_normal;
+                let look_direction = if projected_forward.magnitude() > 0.001 {
+                    projected_forward.normalize()
+                } else {
+                    Vector3::new(1.0, 0.0, 0.0)
+                };
+                
+                let nav_projection = crate::camera::PerspectiveProjection {
+                    fovx: Rad::from(Deg(70.0)),
+                    fovy: Rad::from(Deg(50.0)),
+                    znear: 0.1,
+                    zfar: 500.0,
+                    fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
+                };
+                
+                (camera_pos, look_direction, nav_projection)
             };
             
             // Create camera rotation using ground plane normal as up vector
             let rotation = Quaternion::look_at(look_direction, ground_normal);
-            
-            // Use consistent navigation projection
-            let projection = crate::camera::PerspectiveProjection {
-                fovx: Rad::from(Deg(70.0)),
-                fovy: Rad::from(Deg(50.0)),
-                znear: 0.1,
-                zfar: 500.0,
-                fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
-            };
             
             let camera = PerspectiveCamera::new(
                 Point3::from_vec(camera_pos),
