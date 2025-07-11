@@ -4,7 +4,7 @@ use std::{
     io::{self, BufReader},
 };
 
-use cgmath::{Matrix3, MetricSpace, Point3, SquareMatrix, Vector2};
+use cgmath::{InnerSpace, Matrix3, MetricSpace, Point3, SquareMatrix, Vector2, Vector3};
 use serde::{Deserialize, Serialize};
 
 use crate::camera::{focal2fov, fov2focal, PerspectiveCamera, PerspectiveProjection};
@@ -172,6 +172,71 @@ impl Scene {
 
     pub fn extend(&self) -> f32 {
         self.extend
+    }
+
+    /// Compute the scene's ground up direction from camera poses
+    /// This provides a stable reference for camera positioning across different scenes
+    pub fn compute_ground_up_direction(&self) -> Vector3<f32> {
+        if self.cameras.is_empty() {
+            log::warn!("No cameras in scene, using default up direction (0, 1, 0)");
+            return Vector3::new(0.0, 1.0, 0.0);
+        }
+
+        // Convert all cameras to PerspectiveCamera to get their up vectors
+        let mut up_vectors = Vec::new();
+
+        for camera in self.cameras.values() {
+            let perspective_camera: PerspectiveCamera = camera.clone().into();
+            let rotation_matrix: Matrix3<f32> = perspective_camera.rotation.into();
+
+            // Extract the up vector (Y-axis) from the camera's rotation matrix
+            // The up vector is the second row of the rotation matrix
+            let up_vector = Vector3::new(
+                rotation_matrix.y.x,
+                rotation_matrix.y.y,
+                rotation_matrix.y.z,
+            );
+
+            // Only use up vectors that are reasonably vertical (not too tilted)
+            // This filters out cameras that are looking straight up or down
+            let vertical_component = up_vector.y.abs();
+            if vertical_component > 0.3 {
+                // At least 30% vertical component
+                up_vectors.push(up_vector);
+            }
+        }
+
+        if up_vectors.is_empty() {
+            log::warn!("No suitable up vectors found in cameras, using default (0, 1, 0)");
+            return Vector3::new(0.0, 1.0, 0.0);
+        }
+
+        // Compute the average up vector
+        let mut average_up = Vector3::new(0.0, 0.0, 0.0);
+        for up_vec in &up_vectors {
+            average_up += *up_vec;
+        }
+        average_up /= up_vectors.len() as f32;
+
+        // Normalize the average up vector
+        let normalized_up = average_up.normalize();
+
+        // Ensure the up vector points upward (positive Y component)
+        let final_up = if normalized_up.y < 0.0 {
+            -normalized_up
+        } else {
+            normalized_up
+        };
+
+        log::info!(
+            "Computed ground up direction from {} cameras: ({:.3}, {:.3}, {:.3})",
+            up_vectors.len(),
+            final_up.x,
+            final_up.y,
+            final_up.z
+        );
+
+        final_up
     }
 
     /// index of nearest camera

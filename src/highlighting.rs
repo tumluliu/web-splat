@@ -29,6 +29,9 @@ pub struct HighlightRenderer {
 
     // Feature flags
     show_normal_arrows: bool,
+
+    // Scene ground up direction for stable camera positioning
+    scene_ground_up: Vector3<f32>,
 }
 
 #[repr(C)]
@@ -92,6 +95,7 @@ impl HighlightRenderer {
             arrow_vertex_count: 0,
             // Feature flags - set to false to disable normal arrows by default
             show_normal_arrows: false,
+            scene_ground_up: Vector3::new(0.0, 1.0, 0.0), // Default to Y-up
         }
     }
 
@@ -488,6 +492,22 @@ impl HighlightRenderer {
     /// Check if normal vector arrows are currently enabled
     pub fn is_showing_normal_arrows(&self) -> bool {
         self.show_normal_arrows
+    }
+
+    /// Set the scene's ground up direction for stable camera positioning
+    pub fn set_scene_ground_up(&mut self, ground_up: Vector3<f32>) {
+        self.scene_ground_up = ground_up;
+        log::info!(
+            "Set scene ground up direction: ({:.3}, {:.3}, {:.3})",
+            ground_up.x,
+            ground_up.y,
+            ground_up.z
+        );
+    }
+
+    /// Get the current scene ground up direction
+    pub fn get_scene_ground_up(&self) -> Vector3<f32> {
+        self.scene_ground_up
     }
 
     fn update_box_instances(&mut self, device: &wgpu::Device) {
@@ -1040,7 +1060,7 @@ impl HighlightRenderer {
         })
     }
 
-    /// Get optimal camera viewing position for the biggest object based on its orientation and ground plane
+    /// Get optimal camera viewing position for the biggest object based on its orientation and scene ground up direction
     pub fn get_first_object_viewing_info(
         &self,
     ) -> Option<(Point3<f32>, Point3<f32>, f32, Vector3<f32>)> {
@@ -1212,27 +1232,12 @@ impl HighlightRenderer {
                     );
                 }
 
-                // Calculate ground plane normal from object's bottom face
-                // Bottom face vertices: 0, 1, 2, 3 (bottom back left, bottom back right, bottom front right, bottom front left)
-                let bottom_v1 = bbox_points[1] - bbox_points[0]; // back edge vector (left to right)
-                let bottom_v2 = bbox_points[3] - bbox_points[0]; // left edge vector (back to front)
-                let ground_normal = bottom_v1.cross(bottom_v2).normalize(); // Ground plane normal (pointing upward)
+                // Use the scene's ground up direction for stable camera positioning
+                let ground_normal = self.scene_ground_up;
 
-                log::info!("Ground plane analysis:");
+                log::info!("Scene ground up direction analysis:");
                 log::info!(
-                    "  Bottom face edge 1: ({:.3}, {:.3}, {:.3})",
-                    bottom_v1.x,
-                    bottom_v1.y,
-                    bottom_v1.z
-                );
-                log::info!(
-                    "  Bottom face edge 2: ({:.3}, {:.3}, {:.3})",
-                    bottom_v2.x,
-                    bottom_v2.y,
-                    bottom_v2.z
-                );
-                log::info!(
-                    "  Ground normal: ({:.3}, {:.3}, {:.3})",
+                    "  Scene ground up: ({:.3}, {:.3}, {:.3})",
                     ground_normal.x,
                     ground_normal.y,
                     ground_normal.z

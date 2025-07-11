@@ -164,6 +164,9 @@ pub struct WindowContext {
     stopwatch: Option<GPUStopwatch>,
     chat_state: ChatState,
     pending_chat_responses: Vec<(String, McpResponse)>,
+    
+    // Ground up direction derived from scene cameras for stable camera positioning
+    ground_up_direction: Vector3<f32>,
 }
 
 impl WindowContext {
@@ -312,6 +315,9 @@ impl WindowContext {
                 ..ChatState::default()
             },
             pending_chat_responses: Vec::new(),
+            
+            // Ground up direction derived from scene cameras for stable camera positioning
+            ground_up_direction: Vector3::new(0.0, 1.0, 0.0),
         })
     }
 
@@ -543,7 +549,7 @@ impl WindowContext {
             self.highlight_renderer.set_highlighted_objects(response.answer.clone(), &self.wgpu_context.device);
             self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
             
-            // Animate camera to first object with ground-plane-aligned positioning
+            // Animate camera to first object with scene ground-aligned positioning
             if let Some((target_center, optimal_camera_pos, object_size, ground_normal)) = self.highlight_renderer.get_first_object_viewing_info() {
                 self.animate_camera_to_ground_aligned_position(target_center, optimal_camera_pos, object_size, ground_normal);
             }
@@ -554,7 +560,7 @@ impl WindowContext {
         }
     }
 
-    fn animate_camera_to_ground_aligned_position(&mut self, target_center: Point3<f32>, optimal_camera_pos: Point3<f32>, object_size: f32, ground_normal: Vector3<f32>) {
+    fn animate_camera_to_ground_aligned_position(&mut self, target_center: Point3<f32>, optimal_camera_pos: Point3<f32>, object_size: f32, _ground_normal: Vector3<f32>) {
         use cgmath::{Deg, Rad};
         
         // Get the current camera position for debugging
@@ -564,11 +570,11 @@ impl WindowContext {
         // Calculate look direction from camera position to target center
         let look_direction = (target_center - optimal_camera_pos).normalize();
         
-        // Use ground normal as the true "up" vector instead of world Y-up
-        let ground_up = ground_normal;
+        // Use the scene's ground up direction for stable camera positioning
+        let ground_up = self.ground_up_direction;
         
-        // Create camera rotation aligned with ground plane
-        // The camera will look at the object with the ground plane as reference
+        // Create camera rotation aligned with the scene's ground plane
+        // The camera will look at the object with the scene's ground plane as reference
         let rotation = Quaternion::look_at(look_direction, ground_up);
         
         // No additional tilt needed - camera is already aligned with ground plane
@@ -592,7 +598,7 @@ impl WindowContext {
         // Set controller center to the object center for proper orbiting
         self.controller.center = target_center;
         
-        // Update controller's up vector to match ground plane
+        // Update controller's up vector to match scene's ground up direction
         self.controller.up = Some(ground_up);
         
         // Create the ground-aligned camera
@@ -603,11 +609,11 @@ impl WindowContext {
         );
         
         // Log the calculated positioning for debugging
-        log::info!("Ground-plane-aligned camera positioning:");
+        log::info!("Scene ground-aligned camera positioning:");
         log::info!("  Object center: ({:.3}, {:.3}, {:.3})", target_center.x, target_center.y, target_center.z);
         log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", optimal_camera_pos.x, optimal_camera_pos.y, optimal_camera_pos.z);
         log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
-        log::info!("  Ground normal (up): ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
+        log::info!("  Scene ground up: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
         log::info!("  Object size: {:.3}", object_size);
         log::info!("  FOV: {:.1}°", base_fov.0 * fov_adjustment);
         
@@ -616,7 +622,7 @@ impl WindowContext {
         
         // Animate to the ground-aligned camera position with smooth transition
         self.set_camera(final_camera, Duration::from_millis(1500));
-        log::info!("Camera animating to ground-plane-aligned position");
+        log::info!("Camera animating to scene ground-aligned position");
     }
 
     fn animate_camera_along_path_with_object(&mut self, path: crate::chat::ScenePath, target_object: &crate::chat::SceneObject) {
@@ -629,29 +635,10 @@ impl WindowContext {
         
         log::info!("🎬 Starting elegant path animation with {} waypoints", path.waypoints.len());
         
-        // Calculate ground plane normal from target object's aligned_bbox (like highlighting code)
-        let ground_normal = if target_object.aligned_bbox.len() >= 8 {
-            let bbox_points: Vec<Vector3<f32>> = target_object.aligned_bbox
-                .iter()
-                .map(|p| Vector3::new(p[0], p[1], p[2]))
-                .collect();
+        // Use the scene's ground up direction for stable camera positioning
+        let ground_normal = self.ground_up_direction;
         
-            // Bottom face: 0=back-left, 1=back-right, 2=front-right, 3=front-left
-            let bottom_v1 = bbox_points[1] - bbox_points[0]; // back edge (left to right)
-            let bottom_v2 = bbox_points[3] - bbox_points[0]; // left edge (back to front)
-            let ground_normal = bottom_v1.cross(bottom_v2);
-            
-            if ground_normal.magnitude() > 0.001 {
-                let normalized = ground_normal.normalize();
-                if normalized.y < 0.0 { -normalized } else { normalized }
-        } else {
-                Vector3::new(0.0, 1.0, 0.0)
-            }
-        } else {
-            Vector3::new(0.0, 1.0, 0.0)
-        };
-        
-        log::info!("Ground plane normal: ({:.3}, {:.3}, {:.3})", 
+        log::info!("Scene ground up direction: ({:.3}, {:.3}, {:.3})", 
                    ground_normal.x, ground_normal.y, ground_normal.z);
         
         // Calculate object center from aligned_bbox
@@ -985,6 +972,16 @@ impl WindowContext {
         center /= scene.num_cameras() as f32;
 
         self.controller.center = center;
+        
+        // Compute and store the ground up direction from scene cameras
+        self.ground_up_direction = scene.compute_ground_up_direction();
+        
+        // Update controller's up vector to use the scene's ground up direction
+        self.controller.up = Some(self.ground_up_direction);
+        
+        // Update highlighting renderer's ground up direction
+        self.highlight_renderer.set_scene_ground_up(self.ground_up_direction);
+        
         self.scene.replace(scene);
         if self.saved_cameras.is_empty() {
             self.saved_cameras = self
