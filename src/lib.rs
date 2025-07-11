@@ -1200,16 +1200,7 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
 
     if let Some(scene) = scene {
         state.set_scene(scene);
-        // Set the controller up vector before setting the camera
-        state.controller.up = Some(state.ground_up_direction);
-        // Set the camera to the first scene camera with zero animation (immediate)
-        if let Some(scene_camera) = state.scene.as_ref().and_then(|s| s.camera(0)) {
-            let camera_pos = scene_camera.position;
-            state.set_camera(scene_camera, Duration::ZERO);
-            // Set the controller center to the camera's center
-            state.controller.center = Point3::from(camera_pos);
-            state.current_view = Some(0);
-        }
+        state.set_scene_camera(0);
         state.scene_file_path = scene_file_path;
     }
 
