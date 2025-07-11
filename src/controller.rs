@@ -1,10 +1,10 @@
 use cgmath::*;
-#[cfg(target_arch = "wasm32")]
-use web_time::Duration;
 use num_traits::Float;
 use std::f32::consts::PI;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
+#[cfg(target_arch = "wasm32")]
+use web_time::Duration;
 
 use winit::keyboard::KeyCode;
 
@@ -105,7 +105,7 @@ impl CameraController {
     }
 
     /// moves the controller center to the closest point on a line defined by the camera position and rotation
-    /// ajusts the controller up vector by projecting the current up vector onto the plane defined by the camera right vector
+    /// preserves the scene's ground up direction instead of projecting it
     pub fn reset_to_camera(&mut self, camera: PerspectiveCamera) {
         let inv_view = camera.rotation.invert();
         let forward = inv_view * Vector3::unit_z();
@@ -113,11 +113,9 @@ impl CameraController {
 
         // move center point
         self.center = closest_point(camera.position, forward, self.center);
-        // adjust up vector by projecting it onto the plane defined by the right vector of the camera
-        if let Some(up) = &self.up {
-            let new_up = up - up.project_on(right);
-            self.up = Some(new_up.normalize());
-        }
+
+        // Don't modify the up vector - let the scene's ground up direction be preserved
+        // The up vector should be set by the scene management code, not modified here
     }
 
     pub fn update_camera(&mut self, camera: &mut PerspectiveCamera, dt: Duration) {

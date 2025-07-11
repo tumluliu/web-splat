@@ -806,8 +806,6 @@ impl WindowContext {
                 if next_camera.done() {
                     self.animation.take();
                     self.controller.reset_to_camera(self.splatting_args.camera);
-                    // Ensure controller maintains the scene's ground up direction after animation
-                    self.controller.up = Some(self.ground_up_direction);
                 }
             }
         } else {
@@ -1046,8 +1044,6 @@ impl WindowContext {
     fn cancle_animation(&mut self) {
         self.animation.take();
         self.controller.reset_to_camera(self.splatting_args.camera);
-        // Ensure controller maintains the scene's ground up direction
-        self.controller.up = Some(self.ground_up_direction);
     }
 
     fn stop_animation(&mut self) {
@@ -1055,8 +1051,6 @@ impl WindowContext {
             *playing = false;
         }
         self.controller.reset_to_camera(self.splatting_args.camera);
-        // Ensure controller maintains the scene's ground up direction
-        self.controller.up = Some(self.ground_up_direction);
     }
 
     fn set_scene_camera(&mut self, i: usize) {
@@ -1102,8 +1096,6 @@ impl WindowContext {
             .camera
             .projection
             .resize(self.config.width, self.config.height);
-        // Ensure controller maintains the scene's ground up direction
-        self.controller.up = Some(self.ground_up_direction);
     }
 
     fn save_view(&mut self) {
@@ -1208,7 +1200,16 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
 
     if let Some(scene) = scene {
         state.set_scene(scene);
-        state.set_scene_camera(0);
+        // Set the controller up vector before setting the camera
+        state.controller.up = Some(state.ground_up_direction);
+        // Set the camera to the first scene camera with zero animation (immediate)
+        if let Some(scene_camera) = state.scene.as_ref().and_then(|s| s.camera(0)) {
+            let camera_pos = scene_camera.position;
+            state.set_camera(scene_camera, Duration::ZERO);
+            // Set the controller center to the camera's center
+            state.controller.center = Point3::from(camera_pos);
+            state.current_view = Some(0);
+        }
         state.scene_file_path = scene_file_path;
     }
 
