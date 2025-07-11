@@ -806,6 +806,8 @@ impl WindowContext {
                 if next_camera.done() {
                     self.animation.take();
                     self.controller.reset_to_camera(self.splatting_args.camera);
+                    // Ensure controller maintains the scene's ground up direction after animation
+                    self.controller.up = Some(self.ground_up_direction);
                 }
             }
         } else {
@@ -1044,6 +1046,8 @@ impl WindowContext {
     fn cancle_animation(&mut self) {
         self.animation.take();
         self.controller.reset_to_camera(self.splatting_args.camera);
+        // Ensure controller maintains the scene's ground up direction
+        self.controller.up = Some(self.ground_up_direction);
     }
 
     fn stop_animation(&mut self) {
@@ -1051,6 +1055,8 @@ impl WindowContext {
             *playing = false;
         }
         self.controller.reset_to_camera(self.splatting_args.camera);
+        // Ensure controller maintains the scene's ground up direction
+        self.controller.up = Some(self.ground_up_direction);
     }
 
     fn set_scene_camera(&mut self, i: usize) {
@@ -1058,6 +1064,8 @@ impl WindowContext {
             self.current_view.replace(i);
             log::info!("view moved to camera {i}");
             if let Some(camera) = scene.camera(i) {
+                // Ensure controller maintains the scene's ground up direction
+                self.controller.up = Some(self.ground_up_direction);
                 self.set_camera(camera, Duration::from_millis(200));
             } else {
                 log::error!("camera {i} not found");
@@ -1094,6 +1102,8 @@ impl WindowContext {
             .camera
             .projection
             .resize(self.config.width, self.config.height);
+        // Ensure controller maintains the scene's ground up direction
+        self.controller.up = Some(self.ground_up_direction);
     }
 
     fn save_view(&mut self) {
