@@ -973,8 +973,8 @@ impl WindowContext {
 
         self.controller.center = center;
         
-        // Compute and store the ground up direction from scene cameras
-        self.ground_up_direction = scene.compute_ground_up_direction();
+        // Get the up vector from the first camera in the scene
+        self.ground_up_direction = scene.get_first_camera_up();
         
         // Update controller's up vector to use the scene's ground up direction
         self.controller.up = Some(self.ground_up_direction);
