@@ -1002,6 +1002,7 @@ pub fn create_mock_response(_message: &str) -> McpResponse {
     McpResponse {
         answer: vec![object],
         paths: Vec::new(),
+        scene_normal_vector: Some("[0.0,1.0,0.0]".to_string()), // Y-up for testing
     }
 }
 

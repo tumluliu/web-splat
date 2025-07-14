@@ -4,7 +4,7 @@ use std::{
     io::{self, BufReader},
 };
 
-use cgmath::{InnerSpace, Matrix3, MetricSpace, Point3, SquareMatrix, Vector2, Vector3};
+use cgmath::{Matrix3, MetricSpace, Point3, SquareMatrix, Vector2, Vector3};
 use serde::{Deserialize, Serialize};
 
 use crate::camera::{focal2fov, fov2focal, PerspectiveCamera, PerspectiveProjection};

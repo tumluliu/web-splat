@@ -41,6 +41,8 @@ pub struct McpResponse {
     pub answer: Vec<SceneObject>,
     #[serde(default)]
     pub paths: Vec<PathResponse>,
+    #[serde(default)]
+    pub scene_normal_vector: Option<String>, // Format: "[x,y,z]" string from MCP server
 }
 
 #[derive(Debug, Clone)]
@@ -176,6 +178,7 @@ pub async fn send_chat_message(
         Ok(McpResponse {
             answer: Vec::new(),
             paths: Vec::new(),
+            scene_normal_vector: None,
         })
     }
 }
@@ -285,6 +288,7 @@ pub async fn send_chat_message(
         Ok(McpResponse {
             answer: Vec::new(),
             paths: Vec::new(),
+            scene_normal_vector: None,
         })
     }
 }
@@ -296,6 +300,8 @@ fn parse_mcp_response(
     #[derive(Debug, Clone, Deserialize)]
     struct RawMcpResponse {
         answer: serde_json::Value,
+        #[serde(default)]
+        scene_normal_vector: Option<String>,
     }
 
     #[derive(Debug, Clone, Deserialize)]
@@ -311,6 +317,10 @@ fn parse_mcp_response(
     // First, parse the outer JSON structure
     let raw_response: RawMcpResponse = serde_json::from_str(response_text)?;
     log::info!("Raw answer value: {:?}", raw_response.answer);
+    log::info!(
+        "Scene normal vector: {:?}",
+        raw_response.scene_normal_vector
+    );
 
     let (answer, paths) = match raw_response.answer {
         // Case 1: answer is already a JSON array (legacy object format)
@@ -357,6 +367,7 @@ fn parse_mcp_response(
             return Ok(McpResponse {
                 answer: Vec::new(),
                 paths: Vec::new(),
+                scene_normal_vector: None,
             });
         }
     };
@@ -366,7 +377,36 @@ fn parse_mcp_response(
         answer.len(),
         paths.len()
     );
-    Ok(McpResponse { answer, paths })
+    Ok(McpResponse {
+        answer,
+        paths,
+        scene_normal_vector: raw_response.scene_normal_vector,
+    })
+}
+
+/// Parse scene normal vector from string format "[x,y,z]"
+pub fn parse_scene_normal_vector(normal_str: &str) -> Option<cgmath::Vector3<f32>> {
+    use cgmath::InnerSpace;
+
+    // Remove brackets and split by comma
+    let cleaned = normal_str.trim_matches(|c| c == '[' || c == ']');
+    let parts: Vec<&str> = cleaned.split(',').collect();
+
+    if parts.len() == 3 {
+        if let (Ok(x), Ok(y), Ok(z)) = (
+            parts[0].trim().parse::<f32>(),
+            parts[1].trim().parse::<f32>(),
+            parts[2].trim().parse::<f32>(),
+        ) {
+            let vector = cgmath::Vector3::new(x, y, z);
+            if vector.magnitude() > 0.001 {
+                return Some(vector.normalize());
+            }
+        }
+    }
+
+    log::warn!("Failed to parse scene normal vector from: '{}'", normal_str);
+    None
 }
 
 // Global storage for async responses in WASM

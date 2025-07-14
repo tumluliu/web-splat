@@ -14,7 +14,6 @@ use wgpu::{util::DeviceExt, Backends, Extent3d};
 
 use cgmath::{Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, UlpsEq, Vector2, Vector3};
 use egui::FullOutput;
-use num_traits::One;
 
 use utils::key_to_num;
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,6 +28,64 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
+
+// Helper function to create a default camera position that respects the scene's up direction
+fn create_default_camera_with_up(
+    aabb: pointcloud::Aabb<f32>,
+    aspect: f32,
+    size: PhysicalSize<u32>,
+    ground_up: Vector3<f32>,
+) -> PerspectiveCamera {
+    let center = aabb.center();
+    let radius = aabb.radius();
+    
+    // Create a camera position that's offset from the center in a direction perpendicular to the ground up
+    // Choose a direction that's not parallel to the ground up vector
+    let mut offset_direction = Vector3::new(1.0, 0.0, 1.0);
+    
+    // If the ground up is too similar to our default offset, use a different direction
+    if ground_up.dot(offset_direction.normalize()) > 0.9 {
+        offset_direction = Vector3::new(0.0, 1.0, 1.0);
+    }
+    
+    // Project the offset direction onto the plane perpendicular to ground up
+    let projected_offset = offset_direction - offset_direction.dot(ground_up) * ground_up;
+    let camera_direction = if projected_offset.magnitude() > 0.001 {
+        projected_offset.normalize()
+    } else {
+        // Fallback to a safe direction perpendicular to ground up
+        let perpendicular = if ground_up.y.abs() < 0.9 {
+            Vector3::new(0.0, 1.0, 0.0).cross(ground_up).normalize()
+        } else {
+            Vector3::new(1.0, 0.0, 0.0).cross(ground_up).normalize()
+        };
+        perpendicular
+    };
+    
+    // Position camera at a reasonable distance from the center
+    let camera_position = center + camera_direction * radius * 0.5;
+    
+    // Create a look-at rotation using the ground up direction
+    let look_direction = (center - camera_position).normalize();
+    let rotation = Quaternion::look_at(look_direction, ground_up);
+    
+    log::info!("Created default camera with scene-aligned up direction:");
+    log::info!("  Center: ({:.3}, {:.3}, {:.3})", center.x, center.y, center.z);
+    log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", camera_position.x, camera_position.y, camera_position.z);
+    log::info!("  Ground up: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
+    log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
+    
+    PerspectiveCamera::new(
+        camera_position,
+        rotation,
+        PerspectiveProjection::new(
+            Vector2::new(size.width, size.height),
+            Vector2::new(Deg(45.), Deg(45. / aspect)),
+            0.01,
+            1000.,
+        ),
+    )
+}
 
 mod animation;
 mod ui;
@@ -175,6 +232,7 @@ impl WindowContext {
         window: Window,
         pc_file: R,
         render_config: &RenderConfig,
+        scene: Option<&Scene>,
     ) -> anyhow::Result<Self> {
         let mut size = window.inner_size();
         if size == PhysicalSize::new(0, 0) {
@@ -236,20 +294,44 @@ impl WindowContext {
 
         let aabb = pc.bbox();
         let aspect = size.width as f32 / size.height as f32;
-        let view_camera = PerspectiveCamera::new(
-            aabb.center() - Vector3::new(1., 1., 1.) * aabb.radius() * 0.5,
-            Quaternion::one(),
-            PerspectiveProjection::new(
-                Vector2::new(size.width, size.height),
-                Vector2::new(Deg(45.), Deg(45. / aspect)),
-                0.01,
-                1000.,
-            ),
-        );
+        
+        // Get the scene's ground up direction if available, otherwise use Y-up as fallback
+        let ground_up_direction = if let Some(scene) = scene {
+            let scene_up = scene.get_first_camera_up();
+            log::info!("Initializing with scene's ground up direction: ({:.3}, {:.3}, {:.3})", 
+                       scene_up.x, scene_up.y, scene_up.z);
+            scene_up
+        } else {
+            log::info!("No scene provided, using default Y-up direction");
+            Vector3::new(0.0, 1.0, 0.0)
+        };
+
+        // Create initial camera that respects the scene's coordinate system
+        let view_camera = if let Some(scene) = scene {
+            // If scene is available, use the first camera as a reference for proper initialization
+            if let Some(first_camera) = scene.camera(0) {
+                log::info!("Initializing camera using scene's first camera as reference");
+                let scene_camera: PerspectiveCamera = first_camera.into();
+                
+                // Use the scene camera's position and rotation as a starting point
+                // but adjust the aspect ratio for the current window size
+                let mut initial_camera = scene_camera;
+                initial_camera.projection.resize(size.width, size.height);
+                initial_camera
+            } else {
+                // Fallback if no cameras in scene
+                log::warn!("Scene has no cameras, using default camera position");
+                create_default_camera_with_up(*aabb, aspect, size, ground_up_direction)
+            }
+        } else {
+            // No scene provided, create default camera with Y-up
+            create_default_camera_with_up(*aabb, aspect, size, ground_up_direction)
+        };
 
         let mut controller = CameraController::new(0.1, 0.05);
         controller.center = pc.center();
-        // controller.up = pc.up;
+        controller.up = Some(ground_up_direction);
+        
         let ui_renderer = ui_renderer::EguiWGPU::new(device, surface_format, &window);
 
         let display = Display::new(
@@ -260,7 +342,8 @@ impl WindowContext {
             size.height,
         );
 
-        let highlight_renderer = HighlightRenderer::new(device, surface_format.remove_srgb_suffix());
+        let mut highlight_renderer = HighlightRenderer::new(device, surface_format.remove_srgb_suffix());
+        highlight_renderer.set_scene_ground_up(ground_up_direction);
 
         let stopwatch = if cfg!(not(target_arch = "wasm32")) {
             Some(GPUStopwatch::new(device, Some(3)))
@@ -316,8 +399,8 @@ impl WindowContext {
             },
             pending_chat_responses: Vec::new(),
             
-            // Ground up direction derived from scene cameras for stable camera positioning
-            ground_up_direction: Vector3::new(0.0, 1.0, 0.0),
+            // Use the scene's ground up direction from initialization
+            ground_up_direction,
         })
     }
 
@@ -490,6 +573,56 @@ impl WindowContext {
         // Log current camera position for debugging
         let camera_pos = self.splatting_args.camera.position;
         log::info!("Camera position: ({:.3}, {:.3}, {:.3})", camera_pos.x, camera_pos.y, camera_pos.z);
+        
+        // Update scene ground up direction from MCP response if provided
+        // The MCP server's scene_normal_vector is the primary source of truth
+        let mut ground_up_updated = false;
+        if let Some(scene_normal_str) = &response.scene_normal_vector {
+            if let Some(scene_normal) = crate::chat::parse_scene_normal_vector(scene_normal_str) {
+                log::info!("🎯 MCP provided scene normal vector: ({:.3}, {:.3}, {:.3})", 
+                           scene_normal.x, scene_normal.y, scene_normal.z);
+                
+                // Check if this is different from our current ground up direction
+                let current_up = self.ground_up_direction;
+                let dot_product = current_up.dot(scene_normal);
+                
+                // If the directions are significantly different, update everything
+                if dot_product < 0.98 { // Allow small tolerance for floating point precision
+                    log::info!("⚠️  Scene normal vector changed from ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3})", 
+                               current_up.x, current_up.y, current_up.z,
+                               scene_normal.x, scene_normal.y, scene_normal.z);
+                    
+                    // Update the primary ground up direction
+                    self.ground_up_direction = scene_normal;
+                    
+                    // Update all systems that depend on ground up direction
+                    self.controller.up = Some(scene_normal);
+                    self.highlight_renderer.set_scene_ground_up(scene_normal);
+                    
+                    // If we have a scene, update its understanding of ground up
+                    if let Some(_scene) = &self.scene {
+                        log::info!("📸 Scene was using camera-derived up direction, now using MCP-provided direction");
+                        // Note: We don't modify the scene itself, but our ground_up_direction now overrides it
+                    }
+                    
+                    ground_up_updated = true;
+                    log::info!("✅ Ground up direction updated to MCP-provided normal vector");
+                } else {
+                    log::info!("✅ MCP scene normal vector matches current ground up direction");
+                }
+            }
+        }
+        
+        // If no scene_normal_vector was provided and we don't have a scene, 
+        // make sure we're using a reasonable default
+        if !ground_up_updated && self.scene.is_none() {
+            log::info!("⚠️  No scene_normal_vector provided and no scene loaded, using default Y-up");
+            if self.ground_up_direction != Vector3::new(0.0, 1.0, 0.0) {
+                self.ground_up_direction = Vector3::new(0.0, 1.0, 0.0);
+                self.controller.up = Some(self.ground_up_direction);
+                self.highlight_renderer.set_scene_ground_up(self.ground_up_direction);
+            }
+        }
         
         // Check if this is a navigation response (has paths)
         if !response.paths.is_empty() {
@@ -973,14 +1106,39 @@ impl WindowContext {
 
         self.controller.center = center;
         
-        // Get the up vector from the first camera in the scene
-        self.ground_up_direction = scene.get_first_camera_up();
+        // Only update ground up direction if it hasn't been set by MCP server
+        // The precedence is: MCP scene_normal_vector > scene camera up direction > default Y-up
+        let current_up = self.ground_up_direction;
+        let scene_up = scene.get_first_camera_up();
         
-        // Update controller's up vector to use the scene's ground up direction
-        self.controller.up = Some(self.ground_up_direction);
+        // Check if current up direction is still the default Y-up, meaning no MCP override
+        let is_default_up = current_up == Vector3::new(0.0, 1.0, 0.0);
         
-        // Update highlighting renderer's ground up direction
-        self.highlight_renderer.set_scene_ground_up(self.ground_up_direction);
+        // If we're using default Y-up or the scene provides a significantly different up direction
+        if is_default_up || current_up.dot(scene_up) < 0.98 {
+            if !is_default_up {
+                log::info!("Scene up direction differs from current: ({:.3}, {:.3}, {:.3}) vs ({:.3}, {:.3}, {:.3})", 
+                           current_up.x, current_up.y, current_up.z,
+                           scene_up.x, scene_up.y, scene_up.z);
+                log::info!("Using scene's up direction - MCP scene_normal_vector will override this if provided");
+            }
+            
+            self.ground_up_direction = scene_up;
+            
+            // Update controller's up vector to use the scene's ground up direction
+            self.controller.up = Some(self.ground_up_direction);
+            
+            // Update highlighting renderer's ground up direction
+            self.highlight_renderer.set_scene_ground_up(self.ground_up_direction);
+            
+            log::info!("✅ Scene ground up direction set to: ({:.3}, {:.3}, {:.3})", 
+                       self.ground_up_direction.x, self.ground_up_direction.y, self.ground_up_direction.z);
+        } else {
+            log::info!("🎯 Keeping existing ground up direction (likely from MCP): ({:.3}, {:.3}, {:.3})", 
+                       current_up.x, current_up.y, current_up.z);
+            log::info!("   Scene's up direction: ({:.3}, {:.3}, {:.3})", 
+                       scene_up.x, scene_up.y, scene_up.z);
+        }
         
         self.scene.replace(scene);
         if self.saved_cameras.is_empty() {
@@ -1195,7 +1353,7 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
         })
         .unwrap_or(Duration::from_millis(17));
 
-    let mut state = WindowContext::new(window, file, &config).await.unwrap();
+    let mut state = WindowContext::new(window, file, &config, scene.as_ref()).await.unwrap();
     state.pointcloud_file_path = pointcloud_file_path;
 
     if let Some(scene) = scene {
