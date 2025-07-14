@@ -986,8 +986,8 @@ impl WindowContext {
                        look_direction.x, look_direction.y, look_direction.z);
         }
         
-        // Set controller to use scene's ground up direction for stable controls during path animation
-        self.controller.up = Some(self.ground_up_direction);
+        // Set controller to use ground plane for consistent controls
+        self.controller.up = Some(ground_normal);
         
         // Create simple navigation sequence
         let seconds_per_waypoint = 1.0; // 1 second per waypoint for smooth motion
