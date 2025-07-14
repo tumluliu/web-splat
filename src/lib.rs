@@ -349,10 +349,8 @@ impl WindowContext {
             Vector3::new(0.0, 1.0, 0.0)
         };
         
-        // Always use Y-up for initial view and camera controls to avoid tilting
-        let controller_up_direction = Vector3::new(0.0, 1.0, 0.0);
-        log::info!("Using Y-up ({:.3}, {:.3}, {:.3}) for initial view and camera controls", 
-                   controller_up_direction.x, controller_up_direction.y, controller_up_direction.z);
+        log::info!("Using scene's ground up direction ({:.3}, {:.3}, {:.3}) for initial view and camera controls", 
+                   scene_ground_up_direction.x, scene_ground_up_direction.y, scene_ground_up_direction.z);
 
         // Create initial camera that respects the scene's coordinate system
         let view_camera = if let Some(scene) = scene {
@@ -369,16 +367,16 @@ impl WindowContext {
             } else {
                 // Fallback if no cameras in scene
                 log::warn!("Scene has no cameras, using default camera position");
-                create_default_camera_with_up(*aabb, aspect, size, controller_up_direction)
+                create_default_camera_with_up(*aabb, aspect, size, scene_ground_up_direction)
             }
         } else {
             // No scene provided, create default camera with Y-up
-            create_default_camera_with_up(*aabb, aspect, size, controller_up_direction)
+            create_default_camera_with_up(*aabb, aspect, size, scene_ground_up_direction)
         };
 
         let mut controller = CameraController::new(0.1, 0.05);
         controller.center = pc.center();
-        controller.up = Some(controller_up_direction);
+        controller.up = Some(scene_ground_up_direction);
         
         let ui_renderer = ui_renderer::EguiWGPU::new(device, surface_format, &window);
 
