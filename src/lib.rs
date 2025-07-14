@@ -945,18 +945,24 @@ impl WindowContext {
                            i, i + 1, forward_direction.x, forward_direction.y, forward_direction.z);
                 
                 // Project forward direction onto ground plane to keep camera parallel to ground
+                // This is crucial for preventing tilting - the camera will always look parallel to the ground
                 let projected_forward = forward_direction - forward_direction.dot(ground_normal) * ground_normal;
                 let look_direction = if projected_forward.magnitude() > 0.001 {
                     projected_forward.normalize()
                 } else {
                     // Fallback direction if forward direction is too vertical
-                    Vector3::new(1.0, 0.0, 0.0)
+                    // Use a horizontal direction perpendicular to ground normal
+                    let fallback = if ground_normal.y.abs() < 0.9 {
+                        Vector3::new(0.0, 1.0, 0.0).cross(ground_normal).normalize()
+                    } else {
+                        Vector3::new(1.0, 0.0, 0.0).cross(ground_normal).normalize()
+                    };
+                    fallback
                 };
                 
+                log::info!("  Ground normal: ({:.3}, {:.3}, {:.3})", 
+                           ground_normal.x, ground_normal.y, ground_normal.z);
                 log::info!("  Projected look_direction = ({:.3}, {:.3}, {:.3})", 
-                           look_direction.x, look_direction.y, look_direction.z);
-                
-                log::info!("  Final look_direction = ({:.3}, {:.3}, {:.3})", 
                            look_direction.x, look_direction.y, look_direction.z);
                 
                 let nav_projection = crate::camera::PerspectiveProjection {
