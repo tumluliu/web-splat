@@ -29,14 +29,16 @@ use winit::{
     window::Window,
 };
 
-// Helper function to create proper camera rotation for non-standard up directions
-fn create_look_at_rotation(
-    camera_pos: Point3<f32>,
-    target_pos: Point3<f32>,
-    up_direction: Vector3<f32>,
-) -> Quaternion<f32> {
+// Helper function to "untilt" a camera rotation by preserving look direction but using Y-up
+fn untilt_camera_rotation(original_rotation: Quaternion<f32>) -> Quaternion<f32> {
+    // Get the original look direction (negative Z axis in camera space)
+    let look_direction = -(original_rotation * Vector3::unit_z()).normalize();
+    
+    // Always use Y-up for camera rotations to prevent tilt
+    let up_direction = Vector3::new(0.0, 1.0, 0.0);
+    
     // Build orthonormal basis: forward, right, up
-    let forward = (target_pos - camera_pos).normalize();
+    let forward = look_direction;
     
     // Check if forward and up directions are parallel (avoid singularity)
     let cross_product = forward.cross(up_direction);
@@ -44,12 +46,7 @@ fn create_look_at_rotation(
         cross_product.normalize()
     } else {
         // Use a fallback right direction when forward and up are parallel
-        let fallback = if up_direction.y.abs() < 0.9 {
-            Vector3::new(0.0, 1.0, 0.0).cross(forward).normalize()
-        } else {
-            Vector3::new(1.0, 0.0, 0.0).cross(forward).normalize()
-        };
-        fallback
+        Vector3::new(1.0, 0.0, 0.0).cross(forward).normalize()
     };
     
     let up = right.cross(forward).normalize();
@@ -65,37 +62,88 @@ fn create_look_at_rotation(
     // Convert matrix to quaternion
     let rotation = Quaternion::from(rotation_matrix);
     
-    log::info!("Created rotation for camera at ({:.3}, {:.3}, {:.3}) looking at ({:.3}, {:.3}, {:.3})", 
-               camera_pos.x, camera_pos.y, camera_pos.z,
-               target_pos.x, target_pos.y, target_pos.z);
-    log::info!("  Forward: ({:.3}, {:.3}, {:.3})", forward.x, forward.y, forward.z);
+    log::info!("Untilted camera rotation - preserved look direction with Y-up");
+    log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
     log::info!("  Right: ({:.3}, {:.3}, {:.3})", right.x, right.y, right.z);
-    log::info!("  Up: ({:.3}, {:.3}, {:.3})", up.x, up.y, up.z);
+    log::info!("  Up: ({:.3}, {:.3}, {:.3}) [Always Y-up to prevent tilt]", up.x, up.y, up.z);
     
     rotation
 }
 
-// Helper function to create a default camera position with standard Y-up orientation
-fn create_default_camera_with_up(
+// Helper function to create proper camera rotation from position and target - ALWAYS uses Y-up to prevent tilt
+fn create_untilted_camera_rotation(
+    camera_pos: Point3<f32>,
+    target_pos: Point3<f32>,
+) -> Quaternion<f32> {
+    // Always use Y-up for camera rotations to prevent tilt
+    let up_direction = Vector3::new(0.0, 1.0, 0.0);
+    
+    // Build orthonormal basis: forward, right, up
+    let forward = (target_pos - camera_pos).normalize();
+    
+    // Check if forward and up directions are parallel (avoid singularity)
+    let cross_product = forward.cross(up_direction);
+    let right = if cross_product.magnitude() > 0.001 {
+        cross_product.normalize()
+    } else {
+        // Use a fallback right direction when forward and up are parallel
+        Vector3::new(1.0, 0.0, 0.0).cross(forward).normalize()
+    };
+    
+    let up = right.cross(forward).normalize();
+    
+    // Create rotation matrix from orthonormal basis
+    // Camera looks down negative Z axis, so negate forward
+    let rotation_matrix = cgmath::Matrix3::new(
+        right.x, up.x, -forward.x,
+        right.y, up.y, -forward.y,
+        right.z, up.z, -forward.z,
+    );
+    
+    // Convert matrix to quaternion
+    let rotation = Quaternion::from(rotation_matrix);
+    
+    log::info!("Created untilted camera rotation from ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3})", 
+               camera_pos.x, camera_pos.y, camera_pos.z,
+               target_pos.x, target_pos.y, target_pos.z);
+    log::info!("  Forward: ({:.3}, {:.3}, {:.3})", forward.x, forward.y, forward.z);
+    log::info!("  Right: ({:.3}, {:.3}, {:.3})", right.x, right.y, right.z);
+    log::info!("  Up: ({:.3}, {:.3}, {:.3}) [Always Y-up to prevent tilt]", up.x, up.y, up.z);
+    
+    rotation
+}
+
+// Legacy function kept for compatibility but now always uses Y-up
+fn create_look_at_rotation(
+    camera_pos: Point3<f32>,
+    target_pos: Point3<f32>,
+    _up_direction: Vector3<f32>, // Ignored - always use Y-up to prevent tilt
+) -> Quaternion<f32> {
+    // Always delegate to untilted version to prevent tilt
+    create_untilted_camera_rotation(camera_pos, target_pos)
+}
+
+// Helper function to create a default camera position with Y-up orientation
+fn create_default_camera_with_y_up(
     aabb: pointcloud::Aabb<f32>,
     aspect: f32,
     size: PhysicalSize<u32>,
-    _ground_up: Vector3<f32>, // Ignored for initial view - use standard Y-up instead
 ) -> PerspectiveCamera {
     let center = aabb.center();
     let radius = aabb.radius();
     
-    // Use standard camera positioning with Y-up for initial view
+    // Use standard camera positioning with Y-up
     let camera_position = center + Vector3::new(0.0, 0.0, radius * 0.5);
     let look_direction = (center - camera_position).normalize();
     
-    // Always use standard Y-up for the initial view to avoid tilt
+    // Always use Y-up for camera rotations to prevent tilt
     let rotation = Quaternion::look_at(-look_direction, Vector3::new(0.0, 1.0, 0.0));
     
-    log::info!("Created default camera with standard Y-up orientation:");
+    log::info!("Created default camera with Y-up orientation:");
     log::info!("  Center: ({:.3}, {:.3}, {:.3})", center.x, center.y, center.z);
     log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", camera_position.x, camera_position.y, camera_position.z);
     log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
+    log::info!("  Rotation: Always Y-up to prevent tilt");
     
     PerspectiveCamera::new(
         camera_position,
@@ -109,26 +157,7 @@ fn create_default_camera_with_up(
     )
 }
 
-// Helper function to use scene camera rotation as ground truth
-fn use_raw_scene_camera(scene_camera: SceneCamera) -> PerspectiveCamera {
-    // Use the scene camera exactly as it was captured - no transformation
-    let perspective_camera: PerspectiveCamera = scene_camera.into();
-    
-    log::info!("Using raw scene camera orientation as ground truth:");
-    log::info!("  Position: ({:.3}, {:.3}, {:.3})", 
-               perspective_camera.position.x, perspective_camera.position.y, perspective_camera.position.z);
-    
-    // Extract the up direction from the scene camera's rotation matrix for reference
-    let rotation_matrix: cgmath::Matrix3<f32> = perspective_camera.rotation.into();
-    let scene_up = Vector3::new(
-        rotation_matrix.y.x,
-        rotation_matrix.y.y,
-        rotation_matrix.y.z,
-    );
-    log::info!("  Scene camera up direction: ({:.3}, {:.3}, {:.3})", scene_up.x, scene_up.y, scene_up.z);
-    
-    perspective_camera
-}
+
 
 mod animation;
 mod ui;
@@ -265,7 +294,7 @@ pub struct WindowContext {
     chat_state: ChatState,
     pending_chat_responses: Vec<(String, McpResponse)>,
     
-    // Ground up direction derived from scene cameras for stable camera positioning
+    // Ground up direction for object positioning only (camera rotations always use Y-up)
     ground_up_direction: Vector3<f32>,
 }
 
@@ -338,10 +367,10 @@ impl WindowContext {
         let aabb = pc.bbox();
         let aspect = size.width as f32 / size.height as f32;
         
-        // Store the scene's ground up direction for object search/navigation, but use Y-up for initial view/controls
+        // Store the scene's ground up direction for object positioning only (not camera tilt)
         let scene_ground_up_direction = if let Some(scene) = scene {
             let scene_up = scene.get_first_camera_up();
-            log::info!("Scene's ground up direction: ({:.3}, {:.3}, {:.3})", 
+            log::info!("Scene's ground up direction (for object positioning): ({:.3}, {:.3}, {:.3})", 
                        scene_up.x, scene_up.y, scene_up.z);
             scene_up
         } else {
@@ -349,34 +378,42 @@ impl WindowContext {
             Vector3::new(0.0, 1.0, 0.0)
         };
         
-        // Always use Y-up for initial view and camera controls to avoid tilting
-        let controller_up_direction = Vector3::new(0.0, 1.0, 0.0);
-        log::info!("Using Y-up ({:.3}, {:.3}, {:.3}) for initial view and camera controls", 
-                   controller_up_direction.x, controller_up_direction.y, controller_up_direction.z);
+        log::info!("Camera system: Always using Y-up for camera rotations to prevent tilt");
+        log::info!("Scene cameras: Use exact orientation from cameras.json (no untilting)");
+        log::info!("Navigation cameras: Apply Y-up rotation to prevent tilt");
+        log::info!("User interaction: Controller always uses Y-up");
 
-        // Create initial camera that respects the scene's coordinate system
+        // Create initial camera using scene camera orientation exactly as-is
         let view_camera = if let Some(scene) = scene {
-            // If scene is available, use the first camera as a reference for proper initialization
+            // If scene is available, use the first camera with exact scene orientation
             if let Some(first_camera) = scene.camera(0) {
-                log::info!("Initializing camera using scene's first camera as reference");
+                log::info!("Initializing camera using scene's first camera with exact scene orientation");
                 
-                // Use the raw scene camera as ground truth - it was captured in the actual environment
-                let mut initial_camera = use_raw_scene_camera(first_camera);
+                // Use the scene camera exactly as-is (no untilting for scene cameras)
+                let mut initial_camera: PerspectiveCamera = first_camera.clone().into();
                 initial_camera.projection.resize(size.width, size.height);
+                
+                log::info!("Created initial camera:");
+                log::info!("  Position: ({:.3}, {:.3}, {:.3}) [from scene]", initial_camera.position.x, initial_camera.position.y, initial_camera.position.z);
+                log::info!("  Rotation: Exact scene camera orientation from cameras.json");
+                
                 initial_camera
             } else {
                 // Fallback if no cameras in scene
                 log::warn!("Scene has no cameras, using default camera position");
-                create_default_camera_with_up(*aabb, aspect, size, controller_up_direction)
+                create_default_camera_with_y_up(*aabb, aspect, size)
             }
         } else {
             // No scene provided, create default camera with Y-up
-            create_default_camera_with_up(*aabb, aspect, size, controller_up_direction)
+            create_default_camera_with_y_up(*aabb, aspect, size)
         };
 
         let mut controller = CameraController::new(0.1, 0.05);
         controller.center = pc.center();
-        controller.up = Some(controller_up_direction);
+        
+        // Always use Y-up for controller to prevent tilt during user interaction
+        controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
+        log::info!("Controller: Always using Y-up to prevent tilt during user interaction");
         
         let ui_renderer = ui_renderer::EguiWGPU::new(device, surface_format, &window);
 
@@ -620,56 +657,23 @@ impl WindowContext {
         let camera_pos = self.splatting_args.camera.position;
         log::info!("Camera position: ({:.3}, {:.3}, {:.3})", camera_pos.x, camera_pos.y, camera_pos.z);
         
-        // Update scene ground up direction from MCP response if provided
-        // The MCP server's scene_normal_vector is the primary source of truth
-        let mut ground_up_updated = false;
+        // Update scene ground up direction from MCP response if provided (for object positioning only)
         if let Some(scene_normal_str) = &response.scene_normal_vector {
             if let Some(scene_normal) = crate::chat::parse_scene_normal_vector(scene_normal_str) {
-                log::info!("🎯 MCP provided scene normal vector: ({:.3}, {:.3}, {:.3})", 
+                log::info!("🎯 MCP provided scene normal vector: ({:.3}, {:.3}, {:.3}) [for object positioning only]", 
                            scene_normal.x, scene_normal.y, scene_normal.z);
                 
-                // scene_normal_vector always points from ground to ceiling (stable convention)
-                // Check if this is different from our current ground up direction
-                let current_up = self.ground_up_direction;
-                let dot_product = current_up.dot(scene_normal);
+                // Update ground up direction for object positioning only
+                self.ground_up_direction = scene_normal;
+                self.highlight_renderer.set_scene_ground_up(scene_normal);
                 
-                // If the directions are significantly different, update everything
-                if dot_product < 0.98 { // Allow small tolerance for floating point precision
-                    log::info!("⚠️  Scene normal vector changed from ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3})", 
-                               current_up.x, current_up.y, current_up.z,
-                               scene_normal.x, scene_normal.y, scene_normal.z);
-                    
-                    // Update the primary ground up direction
-                    self.ground_up_direction = scene_normal;
-                    
-                    // Update all systems that depend on ground up direction
-                    self.controller.up = Some(scene_normal);
-                    self.highlight_renderer.set_scene_ground_up(scene_normal);
-                    
-                    // If we have a scene, update its understanding of ground up
-                    if let Some(_scene) = &self.scene {
-                        log::info!("📸 Scene was using camera-derived up direction, now using MCP-provided direction");
-                        // Note: We don't modify the scene itself, but our ground_up_direction now overrides it
-                    }
-                    
-                    ground_up_updated = true;
-                    log::info!("✅ Ground up direction updated to auto-detected MCP direction");
-                } else {
-                    log::info!("✅ MCP scene normal vector matches current ground up direction");
-                }
+                log::info!("✅ Ground up direction updated for object positioning (camera rotations still use Y-up)");
             }
         }
         
-        // If no scene_normal_vector was provided and we don't have a scene, 
-        // make sure we're using a reasonable default
-        if !ground_up_updated && self.scene.is_none() {
-            log::info!("⚠️  No scene_normal_vector provided and no scene loaded, using default Y-up");
-            if self.ground_up_direction != Vector3::new(0.0, 1.0, 0.0) {
-                self.ground_up_direction = Vector3::new(0.0, 1.0, 0.0);
-                self.controller.up = Some(self.ground_up_direction);
-                self.highlight_renderer.set_scene_ground_up(self.ground_up_direction);
-            }
-        }
+        // Controller always uses Y-up to prevent tilt (never modified by MCP)
+        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
+        log::info!("Controller: Always using Y-up to prevent tilt");
         
         // Check if this is a navigation response (has paths)
         if !response.paths.is_empty() {
@@ -729,9 +733,9 @@ impl WindowContext {
             self.highlight_renderer.set_highlighted_objects(response.answer.clone(), &self.wgpu_context.device);
             self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
             
-            // Animate camera to first object with scene ground-aligned positioning
+            // Animate camera to first object with Y-up positioning
             if let Some((target_center, optimal_camera_pos, object_size, ground_normal)) = self.highlight_renderer.get_first_object_viewing_info() {
-                self.animate_camera_to_ground_aligned_position(target_center, optimal_camera_pos, object_size, ground_normal);
+                self.animate_camera_to_object_position(target_center, optimal_camera_pos, object_size, ground_normal);
             }
         } else {
             // Clear highlights if no objects or paths found
@@ -740,7 +744,7 @@ impl WindowContext {
         }
     }
 
-    fn animate_camera_to_ground_aligned_position(&mut self, target_center: Point3<f32>, optimal_camera_pos: Point3<f32>, object_size: f32, _ground_normal: Vector3<f32>) {
+    fn animate_camera_to_object_position(&mut self, target_center: Point3<f32>, optimal_camera_pos: Point3<f32>, object_size: f32, _ground_normal: Vector3<f32>) {
         use cgmath::{Deg, Rad};
         
         // Get the current camera position for debugging
@@ -750,21 +754,10 @@ impl WindowContext {
         // Calculate look direction from camera position to target center
         let look_direction = (target_center - optimal_camera_pos).normalize();
         
-        // Use the scene camera's up direction as ground truth instead of MCP server
-        let ground_up = if let Some(scene) = &self.scene {
-            scene.get_first_camera_up()
-        } else {
-            self.ground_up_direction // Fallback to MCP direction if no scene
-        };
-        log::info!("Using scene camera up direction as ground truth: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
+        log::info!("Navigation: Using Y-up rotation to prevent tilt");
         
-        // Create camera rotation aligned with the scene's ground plane
-        // The camera will look at the object with the scene's ground plane as reference
-        // Use the robust rotation function that handles non-standard up directions
-        let rotation = create_look_at_rotation(optimal_camera_pos, target_center, ground_up);
-        
-        // No additional tilt needed - camera is already aligned with ground plane
-        let final_rotation = rotation;
+        // Create Y-up rotation to prevent tilt
+        let y_up_rotation = create_untilted_camera_rotation(optimal_camera_pos, target_center);
         
         // Set appropriate FOV based on object size (slightly wider for better framing)
         let base_fov = Deg(50.0); // Slightly wider than before
@@ -784,31 +777,31 @@ impl WindowContext {
         // Set controller center to the object center for proper orbiting
         self.controller.center = target_center;
         
-        // Update controller's up vector to match scene's ground up direction
-        self.controller.up = Some(ground_up);
+        // Controller always uses Y-up to prevent tilt
+        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
         
-        // Create the ground-aligned camera
+        // Create the camera with Y-up rotation
         let final_camera = PerspectiveCamera::new(
             optimal_camera_pos,
-            final_rotation,
+            y_up_rotation,
             projection,
         );
         
         // Log the calculated positioning for debugging
-        log::info!("Scene ground-aligned camera positioning:");
+        log::info!("Navigation camera positioning:");
         log::info!("  Object center: ({:.3}, {:.3}, {:.3})", target_center.x, target_center.y, target_center.z);
         log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", optimal_camera_pos.x, optimal_camera_pos.y, optimal_camera_pos.z);
         log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
-        log::info!("  Scene ground up: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
+        log::info!("  Rotation: Y-up to prevent tilt");
         log::info!("  Object size: {:.3}", object_size);
         log::info!("  FOV: {:.1}°", base_fov.0 * fov_adjustment);
         
         // Cancel any existing animation first
         self.animation.take();
         
-        // Animate to the ground-aligned camera position with smooth transition
+        // Animate to the object position with smooth transition
         self.set_camera(final_camera, Duration::from_millis(1500));
-        log::info!("Camera animating to scene ground-aligned position");
+        log::info!("Camera animating to object position with Y-up rotation");
     }
 
     fn animate_camera_along_path_with_object(&mut self, path: crate::chat::ScenePath, target_object: &crate::chat::SceneObject) {
@@ -819,7 +812,7 @@ impl WindowContext {
             return;
         }
         
-        log::info!("🎬 Starting elegant path animation with {} waypoints", path.waypoints.len());
+        log::info!("🎬 Starting path animation with {} waypoints using Y-up rotations", path.waypoints.len());
         
         // TEMPORARY FIX: Reverse waypoints to test if they're coming in reverse order
         let mut reversed_waypoints = path.waypoints.clone();
@@ -829,15 +822,7 @@ impl WindowContext {
             log::info!("  Reversed waypoint {}: ({:.3}, {:.3}, {:.3})", i, waypoint[0], waypoint[1], waypoint[2]);
         }
         
-        // Use the scene camera's up direction as ground truth instead of MCP server
-        let ground_normal = if let Some(scene) = &self.scene {
-            scene.get_first_camera_up()
-        } else {
-            self.ground_up_direction // Fallback to MCP direction if no scene
-        };
-        
-        log::info!("Using scene camera up direction as ground truth: ({:.3}, {:.3}, {:.3})", 
-                   ground_normal.x, ground_normal.y, ground_normal.z);
+        log::info!("Path navigation: Using Y-up rotations to prevent tilt");
         
         // Calculate object center from aligned_bbox
         let object_center = {
@@ -860,12 +845,6 @@ impl WindowContext {
                 // For final waypoint, use optimal object viewing position (same as object search)
                 if let Some((target_center, optimal_camera_pos, object_size, _)) = self.highlight_renderer.get_first_object_viewing_info() {
                     let look_dir = (target_center - optimal_camera_pos).normalize();
-                    let projected_look = look_dir - look_dir.dot(ground_normal) * ground_normal;
-                    let final_look_direction = if projected_look.magnitude() > 0.001 {
-                        projected_look.normalize()
-                    } else {
-                        look_dir
-                    };
                     
                     let obj_projection = crate::camera::PerspectiveProjection {
                         fovx: Rad::from(Deg(50.0)),
@@ -876,17 +855,11 @@ impl WindowContext {
                     };
                     
                     log::info!("  Final waypoint: using optimal object viewing position");
-                    (Vector3::from(optimal_camera_pos.to_vec()), final_look_direction, obj_projection)
+                    (Vector3::from(optimal_camera_pos.to_vec()), look_dir, obj_projection)
                 } else {
                     // Fallback if no optimal position available - use waypoint position directly
                     let camera_pos = waypoint_pos;
                     let look_dir = (object_center - waypoint_pos).normalize();
-                    let projected_look = look_dir - look_dir.dot(ground_normal) * ground_normal;
-                    let final_look_direction = if projected_look.magnitude() > 0.001 {
-                        projected_look.normalize()
-                    } else {
-                        look_dir
-                    };
                     
                     let nav_projection = crate::camera::PerspectiveProjection {
                         fovx: Rad::from(Deg(70.0)),
@@ -896,12 +869,9 @@ impl WindowContext {
                         fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
                     };
                     
-                    (camera_pos, final_look_direction, nav_projection)
+                    (camera_pos, look_dir, nav_projection)
                 }
             } else {
-                // For regular waypoints, use the exact waypoint position (preserving MCP server height)
-                let camera_pos = waypoint_pos;
-                
                 // For regular waypoints, use the exact waypoint position (preserving MCP server height)
                 let camera_pos = waypoint_pos;
                 
@@ -916,25 +886,10 @@ impl WindowContext {
                 log::info!("  Waypoint {} -> {}: forward_direction = ({:.3}, {:.3}, {:.3})", 
                            i, i + 1, forward_direction.x, forward_direction.y, forward_direction.z);
                 
-                // Project forward direction onto ground plane to keep camera parallel to ground
-                // This is crucial for preventing tilting - the camera will always look parallel to the ground
-                let projected_forward = forward_direction - forward_direction.dot(ground_normal) * ground_normal;
-                let look_direction = if projected_forward.magnitude() > 0.001 {
-                    projected_forward.normalize()
-                } else {
-                    // Fallback direction if forward direction is too vertical
-                    // Use a horizontal direction perpendicular to ground normal
-                    let fallback = if ground_normal.y.abs() < 0.9 {
-                        Vector3::new(0.0, 1.0, 0.0).cross(ground_normal).normalize()
-                    } else {
-                        Vector3::new(1.0, 0.0, 0.0).cross(ground_normal).normalize()
-                    };
-                    fallback
-                };
+                // Use the forward direction directly (Y-up rotation handles tilt prevention)
+                let look_direction = forward_direction;
                 
-                log::info!("  Ground normal: ({:.3}, {:.3}, {:.3})", 
-                           ground_normal.x, ground_normal.y, ground_normal.z);
-                log::info!("  Projected look_direction = ({:.3}, {:.3}, {:.3})", 
+                log::info!("  Look direction = ({:.3}, {:.3}, {:.3})", 
                            look_direction.x, look_direction.y, look_direction.z);
                 
                 let nav_projection = crate::camera::PerspectiveProjection {
@@ -948,9 +903,8 @@ impl WindowContext {
                 (camera_pos, look_direction, nav_projection)
             };
             
-            // Create camera rotation using ground plane normal as up vector
-            // Use the robust rotation function that handles non-standard up directions
-            let rotation = create_look_at_rotation(Point3::from_vec(camera_pos), Point3::from_vec(camera_pos + look_direction), ground_normal);
+            // Create camera rotation using Y-up to prevent tilt
+            let rotation = create_untilted_camera_rotation(Point3::from_vec(camera_pos), Point3::from_vec(camera_pos + look_direction));
             
             let camera = PerspectiveCamera::new(
                 Point3::from_vec(camera_pos),
@@ -965,8 +919,8 @@ impl WindowContext {
                        look_direction.x, look_direction.y, look_direction.z);
         }
         
-        // Set controller to use ground plane for consistent controls
-        self.controller.up = Some(ground_normal);
+        // Controller always uses Y-up to prevent tilt
+        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
         
         // Create simple navigation sequence
         let seconds_per_waypoint = 1.0; // 1 second per waypoint for smooth motion
@@ -1180,39 +1134,17 @@ impl WindowContext {
 
         self.controller.center = center;
         
-        // Only update ground up direction if it hasn't been set by MCP server
-        // The precedence is: MCP scene_normal_vector > scene camera up direction > default Y-up
-        let current_up = self.ground_up_direction;
+        // Update ground up direction for object positioning only
         let scene_up = scene.get_first_camera_up();
+        self.ground_up_direction = scene_up;
+        self.highlight_renderer.set_scene_ground_up(scene_up);
         
-        // Check if current up direction is still the default Y-up, meaning no MCP override
-        let is_default_up = current_up == Vector3::new(0.0, 1.0, 0.0);
+        log::info!("Scene loaded - ground up direction set to: ({:.3}, {:.3}, {:.3}) [for object positioning only]", 
+                   scene_up.x, scene_up.y, scene_up.z);
         
-        // If we're using default Y-up or the scene provides a significantly different up direction
-        if is_default_up || current_up.dot(scene_up) < 0.98 {
-            if !is_default_up {
-                log::info!("Scene up direction differs from current: ({:.3}, {:.3}, {:.3}) vs ({:.3}, {:.3}, {:.3})", 
-                           current_up.x, current_up.y, current_up.z,
-                           scene_up.x, scene_up.y, scene_up.z);
-                log::info!("Using scene's up direction - MCP scene_normal_vector will override this if provided");
-            }
-            
-            self.ground_up_direction = scene_up;
-            
-            // Update controller's up vector to use the scene's ground up direction
-            self.controller.up = Some(self.ground_up_direction);
-            
-            // Update highlighting renderer's ground up direction
-            self.highlight_renderer.set_scene_ground_up(self.ground_up_direction);
-            
-            log::info!("✅ Scene ground up direction set to: ({:.3}, {:.3}, {:.3})", 
-                       self.ground_up_direction.x, self.ground_up_direction.y, self.ground_up_direction.z);
-        } else {
-            log::info!("🎯 Keeping existing ground up direction (likely from MCP): ({:.3}, {:.3}, {:.3})", 
-                       current_up.x, current_up.y, current_up.z);
-            log::info!("   Scene's up direction: ({:.3}, {:.3}, {:.3})", 
-                       scene_up.x, scene_up.y, scene_up.z);
-        }
+        // Controller always uses Y-up to prevent tilt
+        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
+        log::info!("Controller: Always using Y-up to prevent tilt");
         
         self.scene.replace(scene);
         if self.saved_cameras.is_empty() {
@@ -1290,12 +1222,19 @@ impl WindowContext {
             self.current_view.replace(i);
             log::info!("view moved to camera {i}");
             if let Some(camera) = scene.camera(i) {
-                // Use the raw scene camera as ground truth - it was captured in the actual environment
-                let scene_camera = use_raw_scene_camera(camera);
+                log::info!("Switching to scene camera {} with exact scene orientation", i);
                 
-                // Always use Y-up for controller to avoid tilting when switching between scene cameras
+                // Use the scene camera exactly as-is (no untilting for scene cameras)
+                let mut scene_camera: PerspectiveCamera = camera.clone().into();
+                scene_camera.projection.resize(self.config.width, self.config.height);
+                
+                // Controller always uses Y-up to prevent tilt during user interaction
                 self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
-                log::info!("Controller using Y-up direction for natural camera controls");
+                log::info!("Controller: Always using Y-up to prevent tilt during user interaction");
+                
+                log::info!("Created scene camera {}:", i);
+                log::info!("  Position: ({:.3}, {:.3}, {:.3}) [from scene]", scene_camera.position.x, scene_camera.position.y, scene_camera.position.z);
+                log::info!("  Rotation: Exact scene camera orientation from cameras.json");
                 
                 self.set_camera(scene_camera, Duration::from_millis(200));
             } else {
