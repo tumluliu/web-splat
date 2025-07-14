@@ -67,7 +67,10 @@ fn create_default_camera_with_up(
     
     // Create a look-at rotation using the ground up direction
     let look_direction = (center - camera_position).normalize();
-    let rotation = Quaternion::look_at(look_direction, ground_up);
+    // Test flipping the ground up direction to see if the scene_normal_vector is actually pointing down
+    let test_ground_up = -ground_up;
+    // Use negative look direction because cameras look down the negative Z axis
+    let rotation = Quaternion::look_at(-look_direction, test_ground_up);
     
     log::info!("Created default camera with scene-aligned up direction:");
     log::info!("  Center: ({:.3}, {:.3}, {:.3})", center.x, center.y, center.z);
@@ -704,11 +707,14 @@ impl WindowContext {
         let look_direction = (target_center - optimal_camera_pos).normalize();
         
         // Use the scene's ground up direction for stable camera positioning
-        let ground_up = self.ground_up_direction;
+        // Try flipping the ground up direction to see if the scene_normal_vector is actually pointing down
+        let ground_up = -self.ground_up_direction;
+        log::info!("TESTING: Flipping ground up direction to: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
         
         // Create camera rotation aligned with the scene's ground plane
         // The camera will look at the object with the scene's ground plane as reference
-        let rotation = Quaternion::look_at(look_direction, ground_up);
+        // Use negative look direction because cameras look down the negative Z axis
+        let rotation = Quaternion::look_at(-look_direction, ground_up);
         
         // No additional tilt needed - camera is already aligned with ground plane
         let final_rotation = rotation;
@@ -769,9 +775,10 @@ impl WindowContext {
         log::info!("🎬 Starting elegant path animation with {} waypoints", path.waypoints.len());
         
         // Use the scene's ground up direction for stable camera positioning
-        let ground_normal = self.ground_up_direction;
+        // Try flipping the ground up direction to see if the scene_normal_vector is actually pointing down
+        let ground_normal = -self.ground_up_direction;
         
-        log::info!("Scene ground up direction: ({:.3}, {:.3}, {:.3})", 
+        log::info!("TESTING: Flipping ground up direction to: ({:.3}, {:.3}, {:.3})", 
                    ground_normal.x, ground_normal.y, ground_normal.z);
         
         // Calculate object center from aligned_bbox
@@ -876,7 +883,8 @@ impl WindowContext {
             };
             
             // Create camera rotation using ground plane normal as up vector
-            let rotation = Quaternion::look_at(look_direction, ground_normal);
+            // Use negative look direction because cameras look down the negative Z axis
+            let rotation = Quaternion::look_at(-look_direction, ground_normal);
             
             let camera = PerspectiveCamera::new(
                 Point3::from_vec(camera_pos),
