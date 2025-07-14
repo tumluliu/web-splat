@@ -842,12 +842,19 @@ impl WindowContext {
         
         log::info!("🎬 Starting elegant path animation with {} waypoints", path.waypoints.len());
         
-        // Use waypoints in the order provided by MCP server (should be source to target)
-        let waypoints_to_use = &path.waypoints;
+        // The waypoints from MCP server are typically in reverse order (target to source)
+        // Reverse them to get the correct order (source to target) for proper camera movement
+        let mut waypoints_to_use = path.waypoints.clone();
+        waypoints_to_use.reverse();
         
-        log::info!("📍 Using waypoints in provided order:");
+        log::info!("📍 Original waypoints (target to source):");
+        for (i, waypoint) in path.waypoints.iter().enumerate() {
+            log::info!("  Original waypoint {}: ({:.3}, {:.3}, {:.3})", i, waypoint[0], waypoint[1], waypoint[2]);
+        }
+        
+        log::info!("📍 Reversed waypoints (source to target):");
         for (i, waypoint) in waypoints_to_use.iter().enumerate() {
-            log::info!("  Waypoint {}: ({:.3}, {:.3}, {:.3})", i, waypoint[0], waypoint[1], waypoint[2]);
+            log::info!("  Reversed waypoint {}: ({:.3}, {:.3}, {:.3})", i, waypoint[0], waypoint[1], waypoint[2]);
         }
         
         // Use the scene camera's up direction as ground truth instead of MCP server
@@ -923,7 +930,10 @@ impl WindowContext {
                 // For regular waypoints, use the exact waypoint position (preserving MCP server height)
                 let camera_pos = waypoint_pos;
                 
-                // Look towards next waypoint
+                // For regular waypoints, use the exact waypoint position (preserving MCP server height)
+                let camera_pos = waypoint_pos;
+                
+                // Look towards next waypoint (waypoints are now in correct order after reversing)
                 let next_waypoint = Vector3::new(
                     waypoints_to_use[i + 1][0],
                     waypoints_to_use[i + 1][1],
@@ -944,6 +954,9 @@ impl WindowContext {
                 };
                 
                 log::info!("  Projected look_direction = ({:.3}, {:.3}, {:.3})", 
+                           look_direction.x, look_direction.y, look_direction.z);
+                
+                log::info!("  Final look_direction = ({:.3}, {:.3}, {:.3})", 
                            look_direction.x, look_direction.y, look_direction.z);
                 
                 let nav_projection = crate::camera::PerspectiveProjection {
