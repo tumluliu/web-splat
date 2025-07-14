@@ -110,16 +110,17 @@ fn create_default_camera_with_up(
 }
 
 // Helper function to create an untilted camera from scene camera position
-fn create_untilted_camera_from_scene(scene_camera: SceneCamera) -> PerspectiveCamera {
+fn create_untilted_camera_from_scene(scene_camera: SceneCamera, scene_center: Point3<f32>) -> PerspectiveCamera {
     // Use the scene camera's position but create a Y-up rotation
     let perspective_camera: PerspectiveCamera = scene_camera.into();
     
     log::info!("Creating untilted camera from scene camera position:");
     log::info!("  Position: ({:.3}, {:.3}, {:.3})", 
                perspective_camera.position.x, perspective_camera.position.y, perspective_camera.position.z);
+    log::info!("  Scene center: ({:.3}, {:.3}, {:.3})", 
+               scene_center.x, scene_center.y, scene_center.z);
     
-    // Create a Y-up rotation that looks at the scene center
-    let scene_center = Point3::new(0.0, 0.0, 0.0); // Assume scene center at origin
+    // Create a Y-up rotation that looks at the actual scene center
     let look_direction = (scene_center - perspective_camera.position).normalize();
     
     // Always use Y-up to avoid tilting
@@ -365,7 +366,8 @@ impl WindowContext {
                 log::info!("Initializing camera using scene's first camera as reference");
                 
                 // Create an untilted camera from the scene camera position
-                let mut initial_camera = create_untilted_camera_from_scene(first_camera);
+                let scene_center = pc.center();
+                let mut initial_camera = create_untilted_camera_from_scene(first_camera, scene_center);
                 initial_camera.projection.resize(size.width, size.height);
                 initial_camera
             } else {
@@ -1295,7 +1297,8 @@ impl WindowContext {
             log::info!("view moved to camera {i}");
             if let Some(camera) = scene.camera(i) {
                 // Create an untilted camera from the scene camera position
-                let scene_camera = create_untilted_camera_from_scene(camera);
+                let scene_center = self.pc.center();
+                let scene_camera = create_untilted_camera_from_scene(camera, scene_center);
                 
                 // Always use Y-up for controller to avoid tilting when switching between scene cameras
                 self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
