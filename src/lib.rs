@@ -877,45 +877,89 @@ impl WindowContext {
         for (i, waypoint) in waypoints_to_use.iter().enumerate() {
             let waypoint_pos = Vector3::new(waypoint[0], waypoint[1], waypoint[2]);
             
-            let (camera_pos, projection) = if i == waypoints_to_use.len() - 1 {
-                // For final waypoint, look towards the target object center
-                let camera_pos = waypoint_pos;
-                let nav_projection = crate::camera::PerspectiveProjection {
-                    fovx: Rad::from(Deg(70.0)),
-                    fovy: Rad::from(Deg(50.0)),
-                    znear: 0.1,
-                    zfar: 500.0,
-                    fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
-                };
-                (camera_pos, nav_projection)
+            let (camera_pos, look_direction, projection) = if i == waypoints_to_use.len() - 1 {
+                // For final waypoint, use optimal object viewing position (same as object search)
+                if let Some((target_center, optimal_camera_pos, object_size, _)) = self.highlight_renderer.get_first_object_viewing_info() {
+                    let look_dir = (target_center - optimal_camera_pos).normalize();
+                    let projected_look = look_dir - look_dir.dot(ground_normal) * ground_normal;
+                    let final_look_direction = if projected_look.magnitude() > 0.001 {
+                        projected_look.normalize()
+                    } else {
+                        look_dir
+                    };
+                    
+                    let obj_projection = crate::camera::PerspectiveProjection {
+                        fovx: Rad::from(Deg(50.0)),
+                        fovy: Rad::from(Deg(50.0)),
+                        znear: (object_size * 0.05).max(0.01),
+                        zfar: (object_size * 15.0).max(150.0),
+                        fov2view_ratio: Deg(50.0).0 / Deg(50.0).0,
+                    };
+                    
+                    log::info!("  Final waypoint: using optimal object viewing position");
+                    (Vector3::from(optimal_camera_pos.to_vec()), final_look_direction, obj_projection)
+                } else {
+                    // Fallback if no optimal position available - use waypoint position directly
+                    let camera_pos = waypoint_pos;
+                    let look_dir = (object_center - waypoint_pos).normalize();
+                    let projected_look = look_dir - look_dir.dot(ground_normal) * ground_normal;
+                    let final_look_direction = if projected_look.magnitude() > 0.001 {
+                        projected_look.normalize()
+                    } else {
+                        look_dir
+                    };
+                    
+                    let nav_projection = crate::camera::PerspectiveProjection {
+                        fovx: Rad::from(Deg(70.0)),
+                        fovy: Rad::from(Deg(50.0)),
+                        znear: 0.1,
+                        zfar: 500.0,
+                        fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
+                    };
+                    
+                    (camera_pos, final_look_direction, nav_projection)
+                }
             } else {
                 // For regular waypoints, use the exact waypoint position (preserving MCP server height)
                 let camera_pos = waypoint_pos;
-                let nav_projection = crate::camera::PerspectiveProjection {
-                    fovx: Rad::from(Deg(70.0)),
-                    fovy: Rad::from(Deg(50.0)),
-                    znear: 0.1,
-                    zfar: 500.0,
-                    fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
-                };
-                (camera_pos, nav_projection)
-            };
-            
-            // Create camera rotation using ground plane normal as up vector
-            // Use the robust rotation function that handles non-standard up directions
-            let target_point = if i == waypoints_to_use.len() - 1 {
-                // For final waypoint, look at the target object
-                Point3::from_vec(object_center)
-            } else {
-                // For regular waypoints, look at the next waypoint
+                
+                // Look towards next waypoint
                 let next_waypoint = Vector3::new(
                     waypoints_to_use[i + 1][0],
                     waypoints_to_use[i + 1][1],
                     waypoints_to_use[i + 1][2]
                 );
-                Point3::from_vec(next_waypoint)
+                let forward_direction = (next_waypoint - waypoint_pos).normalize();
+                
+                log::info!("  Waypoint {} -> {}: forward_direction = ({:.3}, {:.3}, {:.3})", 
+                           i, i + 1, forward_direction.x, forward_direction.y, forward_direction.z);
+                
+                // Project forward direction onto ground plane to keep camera parallel to ground
+                let projected_forward = forward_direction - forward_direction.dot(ground_normal) * ground_normal;
+                let look_direction = if projected_forward.magnitude() > 0.001 {
+                    projected_forward.normalize()
+                } else {
+                    // Fallback direction if forward direction is too vertical
+                    Vector3::new(1.0, 0.0, 0.0)
+                };
+                
+                log::info!("  Projected look_direction = ({:.3}, {:.3}, {:.3})", 
+                           look_direction.x, look_direction.y, look_direction.z);
+                
+                let nav_projection = crate::camera::PerspectiveProjection {
+                    fovx: Rad::from(Deg(70.0)),
+                    fovy: Rad::from(Deg(50.0)),
+                    znear: 0.1,
+                    zfar: 500.0,
+                    fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
+                };
+                
+                (camera_pos, look_direction, nav_projection)
             };
-            let rotation = create_look_at_rotation(Point3::from_vec(camera_pos), target_point, ground_normal);
+            
+            // Create camera rotation using ground plane normal as up vector
+            // Use the robust rotation function that handles non-standard up directions
+            let rotation = create_look_at_rotation(Point3::from_vec(camera_pos), Point3::from_vec(camera_pos + look_direction), ground_normal);
             
             let camera = PerspectiveCamera::new(
                 Point3::from_vec(camera_pos),
@@ -924,6 +968,10 @@ impl WindowContext {
             );
             
             cameras.push(camera);
+            
+            log::info!("  Waypoint {}: camera at path position ({:.2}, {:.2}, {:.2}), look dir ({:.2}, {:.2}, {:.2})",
+                       i + 1, camera_pos.x, camera_pos.y, camera_pos.z,
+                       look_direction.x, look_direction.y, look_direction.z);
         }
         
         // Set controller to use scene's ground up direction for stable controls during path animation
