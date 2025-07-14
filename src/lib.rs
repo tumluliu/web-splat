@@ -109,30 +109,25 @@ fn create_default_camera_with_up(
     )
 }
 
-// Helper function to create an untilted camera from scene camera position
-fn create_untilted_camera_from_scene(scene_camera: SceneCamera, scene_center: Point3<f32>) -> PerspectiveCamera {
-    // Use the scene camera's position but create a Y-up rotation
+// Helper function to use scene camera rotation as ground truth
+fn use_raw_scene_camera(scene_camera: SceneCamera) -> PerspectiveCamera {
+    // Use the scene camera exactly as it was captured - no transformation
     let perspective_camera: PerspectiveCamera = scene_camera.into();
     
-    log::info!("Creating untilted camera from scene camera position:");
+    log::info!("Using raw scene camera orientation as ground truth:");
     log::info!("  Position: ({:.3}, {:.3}, {:.3})", 
                perspective_camera.position.x, perspective_camera.position.y, perspective_camera.position.z);
-    log::info!("  Scene center: ({:.3}, {:.3}, {:.3})", 
-               scene_center.x, scene_center.y, scene_center.z);
     
-    // Create a Y-up rotation that looks at the actual scene center
-    let look_direction = (scene_center - perspective_camera.position).normalize();
+    // Extract the up direction from the scene camera's rotation matrix for reference
+    let rotation_matrix: cgmath::Matrix3<f32> = perspective_camera.rotation.into();
+    let scene_up = Vector3::new(
+        rotation_matrix.y.x,
+        rotation_matrix.y.y,
+        rotation_matrix.y.z,
+    );
+    log::info!("  Scene camera up direction: ({:.3}, {:.3}, {:.3})", scene_up.x, scene_up.y, scene_up.z);
     
-    // Always use Y-up to avoid tilting
-    let rotation = Quaternion::look_at(-look_direction, Vector3::new(0.0, 1.0, 0.0));
-    
-    log::info!("  Created Y-up rotation to avoid tilting");
-    
-    PerspectiveCamera::new(
-        perspective_camera.position,
-        rotation,
-        perspective_camera.projection,
-    )
+    perspective_camera
 }
 
 mod animation;
@@ -364,10 +359,11 @@ impl WindowContext {
             // If scene is available, use the first camera as a reference for proper initialization
             if let Some(first_camera) = scene.camera(0) {
                 log::info!("Initializing camera using scene's first camera as reference");
+                let scene_camera: PerspectiveCamera = first_camera.into();
                 
-                // Create an untilted camera from the scene camera position
-                let scene_center = pc.center();
-                let mut initial_camera = create_untilted_camera_from_scene(first_camera, scene_center);
+                // Use the scene camera's position and rotation as a starting point
+                // but adjust the aspect ratio for the current window size
+                let mut initial_camera = scene_camera;
                 initial_camera.projection.resize(size.width, size.height);
                 initial_camera
             } else {
@@ -1296,9 +1292,8 @@ impl WindowContext {
             self.current_view.replace(i);
             log::info!("view moved to camera {i}");
             if let Some(camera) = scene.camera(i) {
-                // Create an untilted camera from the scene camera position
-                let scene_center = self.pc.center();
-                let scene_camera = create_untilted_camera_from_scene(camera, scene_center);
+                // Use the raw scene camera as ground truth - it was captured in the actual environment
+                let scene_camera = use_raw_scene_camera(camera);
                 
                 // Always use Y-up for controller to avoid tilting when switching between scene cameras
                 self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
