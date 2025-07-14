@@ -75,26 +75,50 @@ fn create_look_at_rotation(
     rotation
 }
 
-// Helper function to create a default camera position with standard Y-up orientation
+// Helper function to create a default camera position that respects the scene's up direction
 fn create_default_camera_with_up(
     aabb: pointcloud::Aabb<f32>,
     aspect: f32,
     size: PhysicalSize<u32>,
-    _ground_up: Vector3<f32>, // Ignored for initial view - use standard Y-up instead
+    ground_up: Vector3<f32>,
 ) -> PerspectiveCamera {
     let center = aabb.center();
     let radius = aabb.radius();
     
-    // Use standard camera positioning with Y-up for initial view
-    let camera_position = center + Vector3::new(0.0, 0.0, radius * 0.5);
+    // Create a camera position that's offset from the center in a direction perpendicular to the ground up
+    // Choose a direction that's not parallel to the ground up vector
+    let mut offset_direction = Vector3::new(1.0, 0.0, 1.0);
+    
+    // If the ground up is too similar to our default offset, use a different direction
+    if ground_up.dot(offset_direction.normalize()) > 0.9 {
+        offset_direction = Vector3::new(0.0, 1.0, 1.0);
+    }
+    
+    // Project the offset direction onto the plane perpendicular to ground up
+    let projected_offset = offset_direction - offset_direction.dot(ground_up) * ground_up;
+    let camera_direction = if projected_offset.magnitude() > 0.001 {
+        projected_offset.normalize()
+    } else {
+        // Fallback to a safe direction perpendicular to ground up
+        let perpendicular = if ground_up.y.abs() < 0.9 {
+            Vector3::new(0.0, 1.0, 0.0).cross(ground_up).normalize()
+        } else {
+            Vector3::new(1.0, 0.0, 0.0).cross(ground_up).normalize()
+        };
+        perpendicular
+    };
+    
+    // Position camera at a reasonable distance from the center
+    let camera_position = center + camera_direction * radius * 0.5;
+    
+    // Create a look-at rotation using the ground up direction
     let look_direction = (center - camera_position).normalize();
+    let rotation = Quaternion::look_at(look_direction, ground_up);
     
-    // Always use standard Y-up for the initial view to avoid tilt
-    let rotation = Quaternion::look_at(-look_direction, Vector3::new(0.0, 1.0, 0.0));
-    
-    log::info!("Created default camera with standard Y-up orientation:");
+    log::info!("Created default camera with scene-aligned up direction:");
     log::info!("  Center: ({:.3}, {:.3}, {:.3})", center.x, center.y, center.z);
     log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", camera_position.x, camera_position.y, camera_position.z);
+    log::info!("  Ground up: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
     log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
     
     PerspectiveCamera::new(
@@ -338,28 +362,42 @@ impl WindowContext {
         let aabb = pc.bbox();
         let aspect = size.width as f32 / size.height as f32;
         
-        // Store the scene's ground up direction for object search/navigation, but use Y-up for initial view/controls
-        let scene_ground_up_direction = if let Some(scene) = scene {
+        // Get the scene's ground up direction if available, otherwise use Y-up as fallback
+        let ground_up_direction = if let Some(scene) = scene {
             let scene_up = scene.get_first_camera_up();
-            log::info!("Scene's ground up direction: ({:.3}, {:.3}, {:.3})", 
+            log::info!("Initializing with scene's ground up direction: ({:.3}, {:.3}, {:.3})", 
                        scene_up.x, scene_up.y, scene_up.z);
             scene_up
         } else {
             log::info!("No scene provided, using default Y-up direction");
             Vector3::new(0.0, 1.0, 0.0)
         };
-        
-        // Always use Y-up for initial view and camera controls to avoid tilting
-        let controller_up_direction = Vector3::new(0.0, 1.0, 0.0);
-        log::info!("Using Y-up ({:.3}, {:.3}, {:.3}) for initial view and camera controls", 
-                   controller_up_direction.x, controller_up_direction.y, controller_up_direction.z);
 
-        // Create initial camera with stable Y-up orientation to avoid tilting
-        let view_camera = create_default_camera_with_up(*aabb, aspect, size, controller_up_direction);
+        // Create initial camera that respects the scene's coordinate system
+        let view_camera = if let Some(scene) = scene {
+            // If scene is available, use the first camera as a reference for proper initialization
+            if let Some(first_camera) = scene.camera(0) {
+                log::info!("Initializing camera using scene's first camera as reference");
+                let scene_camera: PerspectiveCamera = first_camera.into();
+                
+                // Use the scene camera's position and rotation as a starting point
+                // but adjust the aspect ratio for the current window size
+                let mut initial_camera = scene_camera;
+                initial_camera.projection.resize(size.width, size.height);
+                initial_camera
+            } else {
+                // Fallback if no cameras in scene
+                log::warn!("Scene has no cameras, using default camera position");
+                create_default_camera_with_up(*aabb, aspect, size, ground_up_direction)
+            }
+        } else {
+            // No scene provided, create default camera with Y-up
+            create_default_camera_with_up(*aabb, aspect, size, ground_up_direction)
+        };
 
         let mut controller = CameraController::new(0.1, 0.05);
         controller.center = pc.center();
-        controller.up = Some(controller_up_direction);
+        controller.up = Some(ground_up_direction);
         
         let ui_renderer = ui_renderer::EguiWGPU::new(device, surface_format, &window);
 
@@ -372,7 +410,7 @@ impl WindowContext {
         );
 
         let mut highlight_renderer = HighlightRenderer::new(device, surface_format.remove_srgb_suffix());
-        highlight_renderer.set_scene_ground_up(scene_ground_up_direction);
+        highlight_renderer.set_scene_ground_up(ground_up_direction);
 
         let stopwatch = if cfg!(not(target_arch = "wasm32")) {
             Some(GPUStopwatch::new(device, Some(3)))
@@ -429,7 +467,7 @@ impl WindowContext {
             pending_chat_responses: Vec::new(),
             
             // Use the scene's ground up direction from initialization
-            ground_up_direction: scene_ground_up_direction,
+            ground_up_direction,
         })
     }
 
@@ -626,7 +664,6 @@ impl WindowContext {
                     self.ground_up_direction = scene_normal;
                     
                     // Update all systems that depend on ground up direction
-                    ground_up_updated = true;
                     self.controller.up = Some(scene_normal);
                     self.highlight_renderer.set_scene_ground_up(scene_normal);
                     
@@ -889,8 +926,8 @@ impl WindowContext {
             cameras.push(camera);
         }
         
-        // Set controller to use Y-up for stable controls during path animation
-        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
+        // Set controller to use scene's ground up direction for stable controls during path animation
+        self.controller.up = Some(self.ground_up_direction);
         
         // Create simple navigation sequence
         let seconds_per_waypoint = 1.0; // 1 second per waypoint for smooth motion
@@ -1217,9 +1254,10 @@ impl WindowContext {
                 // Use the raw scene camera as ground truth - it was captured in the actual environment
                 let scene_camera = use_raw_scene_camera(camera);
                 
-                // Always use Y-up for controller to avoid tilting when switching between scene cameras
-                self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
-                log::info!("Controller using Y-up direction for natural camera controls");
+                // Use the scene's ground up direction for controller to maintain proper orientation
+                self.controller.up = Some(self.ground_up_direction);
+                log::info!("Controller using scene ground up direction: ({:.3}, {:.3}, {:.3})", 
+                           self.ground_up_direction.x, self.ground_up_direction.y, self.ground_up_direction.z);
                 
                 self.set_camera(scene_camera, Duration::from_millis(200));
             } else {
