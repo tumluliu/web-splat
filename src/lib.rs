@@ -842,18 +842,11 @@ impl WindowContext {
         
         log::info!("🎬 Starting elegant path animation with {} waypoints", path.waypoints.len());
         
-        // The waypoints from MCP server are typically in reverse order (target to source)
-        // Reverse them to get the correct order (source to target) for proper camera movement
-        let mut waypoints_to_use = path.waypoints.clone();
-        waypoints_to_use.reverse();
-        
-        log::info!("📍 Original waypoints (target to source):");
-        for (i, waypoint) in path.waypoints.iter().enumerate() {
-            log::info!("  Original waypoint {}: ({:.3}, {:.3}, {:.3})", i, waypoint[0], waypoint[1], waypoint[2]);
-        }
-        
-        log::info!("📍 Reversed waypoints (source to target):");
-        for (i, waypoint) in waypoints_to_use.iter().enumerate() {
+        // TEMPORARY FIX: Reverse waypoints to test if they're coming in reverse order
+        let mut reversed_waypoints = path.waypoints.clone();
+        reversed_waypoints.reverse();
+        log::info!("🔄 Reversed waypoints for testing:");
+        for (i, waypoint) in reversed_waypoints.iter().enumerate() {
             log::info!("  Reversed waypoint {}: ({:.3}, {:.3}, {:.3})", i, waypoint[0], waypoint[1], waypoint[2]);
         }
         
@@ -880,11 +873,11 @@ impl WindowContext {
         
         let mut cameras = Vec::new();
         
-        // Create cameras for each waypoint
-        for (i, waypoint) in waypoints_to_use.iter().enumerate() {
+        // Create cameras for each waypoint (using reversed waypoints to test backward movement)
+        for (i, waypoint) in reversed_waypoints.iter().enumerate() {
             let waypoint_pos = Vector3::new(waypoint[0], waypoint[1], waypoint[2]);
             
-            let (camera_pos, look_direction, projection) = if i == waypoints_to_use.len() - 1 {
+            let (camera_pos, look_direction, projection) = if i == reversed_waypoints.len() - 1 {
                 // For final waypoint, use optimal object viewing position (same as object search)
                 if let Some((target_center, optimal_camera_pos, object_size, _)) = self.highlight_renderer.get_first_object_viewing_info() {
                     let look_dir = (target_center - optimal_camera_pos).normalize();
@@ -933,11 +926,11 @@ impl WindowContext {
                 // For regular waypoints, use the exact waypoint position (preserving MCP server height)
                 let camera_pos = waypoint_pos;
                 
-                // Look towards next waypoint (waypoints are now in correct order after reversing)
+                // Look towards next waypoint
                 let next_waypoint = Vector3::new(
-                    waypoints_to_use[i + 1][0],
-                    waypoints_to_use[i + 1][1],
-                    waypoints_to_use[i + 1][2]
+                    reversed_waypoints[i + 1][0],
+                    reversed_waypoints[i + 1][1],
+                    reversed_waypoints[i + 1][2]
                 );
                 let forward_direction = (next_waypoint - waypoint_pos).normalize();
                 
@@ -1012,7 +1005,7 @@ impl WindowContext {
         self.animation = Some((animation, true));
         
         log::info!("✅ Started elegant path animation: {} waypoints, {:.1}s duration", 
-                   waypoints_to_use.len(), total_duration.as_secs_f32());
+                   reversed_waypoints.len(), total_duration.as_secs_f32());
         log::info!("   Camera follows exact path waypoints, maintaining MCP server specified heights");
     }
     
