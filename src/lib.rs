@@ -67,10 +67,9 @@ fn create_default_camera_with_up(
     
     // Create a look-at rotation using the ground up direction
     let look_direction = (center - camera_position).normalize();
-    // Test flipping the ground up direction to see if the scene_normal_vector is actually pointing down
-    let test_ground_up = -ground_up;
+    // scene_normal_vector always points from ground to ceiling (stable convention)
     // Use negative look direction because cameras look down the negative Z axis
-    let rotation = Quaternion::look_at(-look_direction, test_ground_up);
+    let rotation = Quaternion::look_at(-look_direction, ground_up);
     
     log::info!("Created default camera with scene-aligned up direction:");
     log::info!("  Center: ({:.3}, {:.3}, {:.3})", center.x, center.y, center.z);
@@ -88,6 +87,27 @@ fn create_default_camera_with_up(
             1000.,
         ),
     )
+}
+
+// Helper function to use scene camera rotation as ground truth
+fn use_raw_scene_camera(scene_camera: SceneCamera) -> PerspectiveCamera {
+    // Use the scene camera exactly as it was captured - no transformation
+    let perspective_camera: PerspectiveCamera = scene_camera.into();
+    
+    log::info!("Using raw scene camera orientation as ground truth:");
+    log::info!("  Position: ({:.3}, {:.3}, {:.3})", 
+               perspective_camera.position.x, perspective_camera.position.y, perspective_camera.position.z);
+    
+    // Extract the up direction from the scene camera's rotation matrix for reference
+    let rotation_matrix: cgmath::Matrix3<f32> = perspective_camera.rotation.into();
+    let scene_up = Vector3::new(
+        rotation_matrix.y.x,
+        rotation_matrix.y.y,
+        rotation_matrix.y.z,
+    );
+    log::info!("  Scene camera up direction: ({:.3}, {:.3}, {:.3})", scene_up.x, scene_up.y, scene_up.z);
+    
+    perspective_camera
 }
 
 mod animation;
@@ -585,6 +605,7 @@ impl WindowContext {
                 log::info!("🎯 MCP provided scene normal vector: ({:.3}, {:.3}, {:.3})", 
                            scene_normal.x, scene_normal.y, scene_normal.z);
                 
+                // scene_normal_vector always points from ground to ceiling (stable convention)
                 // Check if this is different from our current ground up direction
                 let current_up = self.ground_up_direction;
                 let dot_product = current_up.dot(scene_normal);
@@ -599,6 +620,7 @@ impl WindowContext {
                     self.ground_up_direction = scene_normal;
                     
                     // Update all systems that depend on ground up direction
+                    ground_up_updated = true;
                     self.controller.up = Some(scene_normal);
                     self.highlight_renderer.set_scene_ground_up(scene_normal);
                     
@@ -609,7 +631,7 @@ impl WindowContext {
                     }
                     
                     ground_up_updated = true;
-                    log::info!("✅ Ground up direction updated to MCP-provided normal vector");
+                    log::info!("✅ Ground up direction updated to auto-detected MCP direction");
                 } else {
                     log::info!("✅ MCP scene normal vector matches current ground up direction");
                 }
@@ -706,10 +728,13 @@ impl WindowContext {
         // Calculate look direction from camera position to target center
         let look_direction = (target_center - optimal_camera_pos).normalize();
         
-        // Use the scene's ground up direction for stable camera positioning
-        // Try flipping the ground up direction to see if the scene_normal_vector is actually pointing down
-        let ground_up = -self.ground_up_direction;
-        log::info!("TESTING: Flipping ground up direction to: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
+        // Use the scene camera's up direction as ground truth instead of MCP server
+        let ground_up = if let Some(scene) = &self.scene {
+            scene.get_first_camera_up()
+        } else {
+            self.ground_up_direction // Fallback to MCP direction if no scene
+        };
+        log::info!("Using scene camera up direction as ground truth: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
         
         // Create camera rotation aligned with the scene's ground plane
         // The camera will look at the object with the scene's ground plane as reference
@@ -774,11 +799,14 @@ impl WindowContext {
         
         log::info!("🎬 Starting elegant path animation with {} waypoints", path.waypoints.len());
         
-        // Use the scene's ground up direction for stable camera positioning
-        // Try flipping the ground up direction to see if the scene_normal_vector is actually pointing down
-        let ground_normal = -self.ground_up_direction;
+        // Use the scene camera's up direction as ground truth instead of MCP server
+        let ground_normal = if let Some(scene) = &self.scene {
+            scene.get_first_camera_up()
+        } else {
+            self.ground_up_direction // Fallback to MCP direction if no scene
+        };
         
-        log::info!("TESTING: Flipping ground up direction to: ({:.3}, {:.3}, {:.3})", 
+        log::info!("Using scene camera up direction as ground truth: ({:.3}, {:.3}, {:.3})", 
                    ground_normal.x, ground_normal.y, ground_normal.z);
         
         // Calculate object center from aligned_bbox
@@ -1224,9 +1252,20 @@ impl WindowContext {
             self.current_view.replace(i);
             log::info!("view moved to camera {i}");
             if let Some(camera) = scene.camera(i) {
-                // Ensure controller maintains the scene's ground up direction
-                self.controller.up = Some(self.ground_up_direction);
-                self.set_camera(camera, Duration::from_millis(200));
+                // Use the raw scene camera as ground truth - it was captured in the actual environment
+                let scene_camera = use_raw_scene_camera(camera);
+                
+                // Extract the up direction from this scene camera and use it for the controller
+                let rotation_matrix: cgmath::Matrix3<f32> = scene_camera.rotation.into();
+                let scene_up = Vector3::new(
+                    rotation_matrix.y.x,
+                    rotation_matrix.y.y,
+                    rotation_matrix.y.z,
+                );
+                self.controller.up = Some(scene_up);
+                log::info!("Controller using scene camera up direction: ({:.3}, {:.3}, {:.3})", scene_up.x, scene_up.y, scene_up.z);
+                
+                self.set_camera(scene_camera, Duration::from_millis(200));
             } else {
                 log::error!("camera {i} not found");
             }
