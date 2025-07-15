@@ -805,8 +805,8 @@ impl WindowContext {
         // Set controller center to the object center for proper orbiting
         self.controller.center = target_center;
         
-        // Update controller's up vector to match scene's ground up direction
-        self.controller.up = Some(ground_up);
+        // Switch controller to Y-up for navigation to prevent tilt
+        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
         
         // Create the ground-aligned camera
         let final_camera = PerspectiveCamera::new(
@@ -986,8 +986,8 @@ impl WindowContext {
                        look_direction.x, look_direction.y, look_direction.z);
         }
         
-        // Set controller to use ground plane for consistent controls
-        self.controller.up = Some(ground_normal);
+        // Switch controller to Y-up for path navigation to prevent tilt
+        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
         
         // Create simple navigation sequence
         let seconds_per_waypoint = 1.0; // 1 second per waypoint for smooth motion
