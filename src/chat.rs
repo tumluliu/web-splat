@@ -43,6 +43,8 @@ pub struct McpResponse {
     pub paths: Vec<PathResponse>,
     #[serde(default)]
     pub scene_normal_vector: Option<String>, // Format: "[x,y,z]" string from MCP server
+    #[serde(default)]
+    pub text_answer: Option<String>, // For simple text/number responses like "6" or "There are 3 chairs"
 }
 
 #[derive(Debug, Clone)]
@@ -179,6 +181,7 @@ pub async fn send_chat_message(
             answer: Vec::new(),
             paths: Vec::new(),
             scene_normal_vector: None,
+            text_answer: None,
         })
     }
 }
@@ -289,6 +292,7 @@ pub async fn send_chat_message(
             answer: Vec::new(),
             paths: Vec::new(),
             scene_normal_vector: None,
+            text_answer: None,
         })
     }
 }
@@ -322,65 +326,85 @@ fn parse_mcp_response(
         raw_response.scene_normal_vector
     );
 
-    let (answer, paths) = match raw_response.answer {
+    let (answer, paths, text_answer) = match raw_response.answer {
         // Case 1: answer is already a JSON array (legacy object format)
         serde_json::Value::Array(arr) => {
             log::info!("Answer is direct JSON array with {} items", arr.len());
             let objects =
                 serde_json::from_value::<Vec<SceneObject>>(serde_json::Value::Array(arr))?;
-            (objects, Vec::new())
+            (objects, Vec::new(), None)
         }
-        // Case 2: answer is a JSON string that needs to be parsed
-        serde_json::Value::String(json_string) => {
-            log::info!("Answer is JSON string, parsing it: {}", json_string);
+        // Case 2: answer is a simple string or number (e.g., "6", "There are 3 chairs")
+        serde_json::Value::String(simple_string) => {
+            // First check if it's a parseable JSON string containing objects/paths
+            if simple_string.trim().starts_with('[') || simple_string.trim().starts_with('{') {
+                log::info!("Answer is JSON string, parsing it: {}", simple_string);
 
-            // Try to parse as paths wrapper first (new navigation format)
-            if let Ok(paths_wrapper) = serde_json::from_str::<PathsWrapper>(&json_string) {
-                log::info!(
-                    "Parsed as paths wrapper with {} paths",
-                    paths_wrapper.paths.len()
-                );
-                (Vec::new(), paths_wrapper.paths)
-            }
-            // Try to parse as array first (old object format)
-            else if let Ok(objects) = serde_json::from_str::<Vec<SceneObject>>(&json_string) {
-                log::info!("Parsed as direct object array with {} items", objects.len());
-                (objects, Vec::new())
-            }
-            // Try to parse as object with "objects" key (new object format)
-            else if let Ok(wrapper) = serde_json::from_str::<ObjectsWrapper>(&json_string) {
-                log::info!(
-                    "Parsed as objects wrapper with {} items",
-                    wrapper.objects.len()
-                );
-                (wrapper.objects, Vec::new())
-            }
-            // Failed to parse any format
-            else {
-                log::warn!("Failed to parse JSON string as objects, paths, or objects wrapper");
-                (Vec::new(), Vec::new())
+                // Try to parse as paths wrapper first (new navigation format)
+                if let Ok(paths_wrapper) = serde_json::from_str::<PathsWrapper>(&simple_string) {
+                    log::info!(
+                        "Parsed as paths wrapper with {} paths",
+                        paths_wrapper.paths.len()
+                    );
+                    (Vec::new(), paths_wrapper.paths, None)
+                }
+                // Try to parse as array first (old object format)
+                else if let Ok(objects) = serde_json::from_str::<Vec<SceneObject>>(&simple_string)
+                {
+                    log::info!("Parsed as direct object array with {} items", objects.len());
+                    (objects, Vec::new(), None)
+                }
+                // Try to parse as object with "objects" key (new object format)
+                else if let Ok(wrapper) = serde_json::from_str::<ObjectsWrapper>(&simple_string) {
+                    log::info!(
+                        "Parsed as objects wrapper with {} items",
+                        wrapper.objects.len()
+                    );
+                    (wrapper.objects, Vec::new(), None)
+                }
+                // Failed to parse as structured data, treat as simple text
+                else {
+                    log::info!(
+                        "Failed to parse as structured data, treating as simple text answer: '{}'",
+                        simple_string
+                    );
+                    (Vec::new(), Vec::new(), Some(simple_string))
+                }
+            } else {
+                // This is a simple text response (e.g., "6", "There are 3 chairs in this room")
+                log::info!("Answer is simple text response: '{}'", simple_string);
+                (Vec::new(), Vec::new(), Some(simple_string))
             }
         }
-        // Case 3: Unexpected format
+        // Case 3: answer is a simple number
+        serde_json::Value::Number(num) => {
+            let text_response = num.to_string();
+            log::info!("Answer is simple number response: '{}'", text_response);
+            (Vec::new(), Vec::new(), Some(text_response))
+        }
+        // Case 4: Unexpected format
         other => {
             log::warn!("Unexpected answer format: {:?}", other);
             return Ok(McpResponse {
                 answer: Vec::new(),
                 paths: Vec::new(),
                 scene_normal_vector: None,
+                text_answer: None,
             });
         }
     };
 
     log::info!(
-        "Successfully parsed {} objects and {} paths from MCP response",
+        "Successfully parsed {} objects, {} paths, and text answer: {:?} from MCP response",
         answer.len(),
-        paths.len()
+        paths.len(),
+        text_answer
     );
     Ok(McpResponse {
         answer,
         paths,
         scene_normal_vector: raw_response.scene_normal_vector,
+        text_answer,
     })
 }
 

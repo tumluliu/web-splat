@@ -208,6 +208,43 @@ def is_navigation_query(query):
     return any(keyword in query for keyword in navigation_keywords)
 
 
+def is_counting_query(query):
+    """Check if this is a counting/quantification query"""
+    query = query.lower()
+    counting_keywords = [
+        "how many",
+        "count",
+        "number of",
+        "total",
+        "how much",
+        "quantity",
+        "amount of",
+    ]
+    return any(keyword in query for keyword in counting_keywords)
+
+
+def answer_counting_query(query):
+    """Generate appropriate counting responses"""
+    query = query.lower()
+
+    # Check for specific object types in counting queries
+    if "chair" in query:
+        return "4"  # There are 4 chairs in the scene
+    elif "table" in query:
+        return "2"  # There are 2 tables (dining table + coffee table)
+    elif "appliance" in query or "machine" in query:
+        return "3"  # Coffee machine, refrigerator, and potentially others
+    elif "furniture" in query:
+        return "7"  # Chairs, tables, sofa, etc.
+    elif "object" in query or "item" in query or "thing" in query:
+        return "12"  # Total number of major objects in the scene
+    elif "room" in query:
+        return "3"  # Kitchen, dining room, living room areas
+    else:
+        # Generic counting response for unknown items
+        return "Several items found, please be more specific for an exact count"
+
+
 def find_objects_by_query(query):
     """Find objects based on natural language query"""
     query = query.lower()
@@ -451,8 +488,19 @@ def handle_query():
             f"📍 Current location: [{current_location[0]:.3f}, {current_location[1]:.3f}, {current_location[2]:.3f}]"
         )
 
+        # Check if this is a counting query first (highest priority for simple responses)
+        if is_counting_query(messages):
+            print("🔢 Detected COUNTING query - generating simple count response")
+
+            count_answer = answer_counting_query(messages)
+            response = {"answer": count_answer}
+
+            print(f"✅ Sending COUNTING response:")
+            print(f"  Count answer: '{count_answer}'")
+            print(f"  Response: {json.dumps(response, indent=2)}")
+
         # Check if this is a navigation query
-        if is_navigation_query(messages):
+        elif is_navigation_query(messages):
             print("🗺️  Detected NAVIGATION query - generating path response")
 
             # Find the target object for navigation
@@ -534,6 +582,10 @@ def index():
                 "Go to the coffee machine",
                 "Path to the refrigerator",
                 "Route from dining table to coffee machine",
+                "How many chairs are there?",
+                "Count the tables in this room",
+                "How many objects are in the scene?",
+                "Total number of furniture pieces",
             ],
         }
     )
@@ -546,6 +598,9 @@ if __name__ == "__main__":
     print("  - Where is the biggest table?")
     print("  - Show me all the chairs")
     print("  - How do I get from kitchen to dining room?")
+    print("  - How many chairs are there?")
+    print("  - Count the tables in this room")
+    print("  - Total number of furniture pieces")
     print("\n⚠️  IMPORTANT: Watch for request logs above!")
     print("    If you don't see logs when sending chat messages,")
     print("    then HTTP requests are NOT reaching this server!")

@@ -637,6 +637,15 @@ impl WindowContext {
     }
 
     fn update_highlights_and_animate(&mut self, response: McpResponse) {
+        // Check if this is a simple text response (counting questions, etc.)
+        if let Some(text_answer) = &response.text_answer {
+            log::info!("💬 Simple text response received: '{}'", text_answer);
+            // For simple text responses, just clear any existing highlights
+            // No camera animation or object highlighting needed
+            self.highlight_renderer.clear_highlights();
+            return;
+        }
+        
         // Log current camera position for debugging
         let camera_pos = self.splatting_args.camera.position;
         log::info!("Camera position: ({:.3}, {:.3}, {:.3})", camera_pos.x, camera_pos.y, camera_pos.z);
