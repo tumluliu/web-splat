@@ -4,6 +4,35 @@ use std::{
     sync::Arc,
 };
 
+/*
+ * CAMERA ORIENTATION STRATEGY:
+ *
+ * This implementation uses a unified approach to prevent camera tilt while preserving scene accuracy:
+ *
+ * 1. SCENE CAMERAS (cameras.json):
+ *    - Use exact orientation from cameras.json file (no modifications)
+ *    - These are ground truth from 3D Gaussian Splatting training
+ *    - Applied to: Initial view, scene camera switching
+ *
+ * 2. NAVIGATION CAMERAS (object search, path following):
+ *    - Always use Y-up (0, 1, 0) for camera rotations to prevent tilt
+ *    - Applied to: Object search animation, path following animation
+ *
+ * 3. USER INTERACTION:
+ *    - Controller always uses Y-up for consistent, untilted user controls
+ *    - Applied to: All user input (mouse, keyboard, touch)
+ *
+ * 4. OBJECT POSITIONING:
+ *    - Scene ground up direction used only for object positioning calculations
+ *    - Applied to: Highlight renderer positioning, object alignment
+ *
+ * This approach ensures:
+ * - Correct initial scene view (respects cameras.json)
+ * - Untilted navigation (uses Y-up rotations)
+ * - Consistent user interaction (controller always Y-up)
+ * - Proper object positioning (uses scene coordinate system)
+ */
+
 use image::Pixel;
 #[cfg(target_arch = "wasm32")]
 use web_time::{Duration, Instant};
@@ -742,7 +771,7 @@ impl WindowContext {
         }
     }
 
-    fn animate_camera_to_ground_aligned_position(&mut self, target_center: Point3<f32>, optimal_camera_pos: Point3<f32>, object_size: f32, _ground_normal: Vector3<f32>) {
+    fn animate_camera_to_ground_aligned_position(&mut self, target_center: Point3<f32>, optimal_camera_pos: Point3<f32>, object_size: f32, ground_normal: Vector3<f32>) {
         use cgmath::{Deg, Rad};
         
         // Get the current camera position for debugging
@@ -752,21 +781,12 @@ impl WindowContext {
         // Calculate look direction from camera position to target center
         let look_direction = (target_center - optimal_camera_pos).normalize();
         
-        // Use the scene camera's up direction as ground truth instead of MCP server
-        let ground_up = if let Some(scene) = &self.scene {
-            scene.get_first_camera_up()
-        } else {
-            self.ground_up_direction // Fallback to MCP direction if no scene
-        };
-        log::info!("Using scene camera up direction as ground truth: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
+        // Use Y-up for camera rotation to prevent tilt during navigation
+        let camera_up = Vector3::new(0.0, 1.0, 0.0);
+        log::info!("Navigation: Using Y-up for camera rotation to prevent tilt");
         
-        // Create camera rotation aligned with the scene's ground plane
-        // The camera will look at the object with the scene's ground plane as reference
-        // Use the robust rotation function that handles non-standard up directions
-        let rotation = create_look_at_rotation(optimal_camera_pos, target_center, ground_up);
-        
-        // No additional tilt needed - camera is already aligned with ground plane
-        let final_rotation = rotation;
+        // Create camera rotation using Y-up to prevent tilt
+        let rotation = create_look_at_rotation(optimal_camera_pos, target_center, camera_up);
         
         // Set appropriate FOV based on object size (slightly wider for better framing)
         let base_fov = Deg(50.0); // Slightly wider than before
@@ -786,31 +806,33 @@ impl WindowContext {
         // Set controller center to the object center for proper orbiting
         self.controller.center = target_center;
         
-        // Update controller's up vector to match scene's ground up direction
-        self.controller.up = Some(ground_up);
+        // Controller always uses Y-up to prevent tilt during user interaction
+        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
         
-        // Create the ground-aligned camera
+        // Create the navigation camera with Y-up rotation
         let final_camera = PerspectiveCamera::new(
             optimal_camera_pos,
-            final_rotation,
+            rotation,
             projection,
         );
         
         // Log the calculated positioning for debugging
-        log::info!("Scene ground-aligned camera positioning:");
+        log::info!("Navigation camera positioning:");
         log::info!("  Object center: ({:.3}, {:.3}, {:.3})", target_center.x, target_center.y, target_center.z);
         log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", optimal_camera_pos.x, optimal_camera_pos.y, optimal_camera_pos.z);
         log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
-        log::info!("  Scene ground up: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
+        log::info!("  Camera up: Y-up to prevent tilt");
+        log::info!("  Controller up: Y-up to prevent tilt during user interaction");
+        log::info!("  Ground normal: ({:.3}, {:.3}, {:.3}) [for object positioning only]", ground_normal.x, ground_normal.y, ground_normal.z);
         log::info!("  Object size: {:.3}", object_size);
         log::info!("  FOV: {:.1}°", base_fov.0 * fov_adjustment);
         
         // Cancel any existing animation first
         self.animation.take();
         
-        // Animate to the ground-aligned camera position with smooth transition
+        // Animate to the navigation camera position with smooth transition
         self.set_camera(final_camera, Duration::from_millis(1500));
-        log::info!("Camera animating to scene ground-aligned position");
+        log::info!("Camera animating to navigation position with Y-up rotation");
     }
 
     fn animate_camera_along_path_with_object(&mut self, path: crate::chat::ScenePath, target_object: &crate::chat::SceneObject) {
@@ -821,7 +843,7 @@ impl WindowContext {
             return;
         }
         
-        log::info!("🎬 Starting elegant path animation with {} waypoints", path.waypoints.len());
+        log::info!("🎬 Starting path animation with {} waypoints using Y-up rotations", path.waypoints.len());
         
         // TEMPORARY FIX: Reverse waypoints to test if they're coming in reverse order
         let mut reversed_waypoints = path.waypoints.clone();
@@ -831,15 +853,7 @@ impl WindowContext {
             log::info!("  Reversed waypoint {}: ({:.3}, {:.3}, {:.3})", i, waypoint[0], waypoint[1], waypoint[2]);
         }
         
-        // Use the scene camera's up direction as ground truth instead of MCP server
-        let ground_normal = if let Some(scene) = &self.scene {
-            scene.get_first_camera_up()
-        } else {
-            self.ground_up_direction // Fallback to MCP direction if no scene
-        };
-        
-        log::info!("Using scene camera up direction as ground truth: ({:.3}, {:.3}, {:.3})", 
-                   ground_normal.x, ground_normal.y, ground_normal.z);
+        log::info!("Path navigation: Using Y-up rotations to prevent tilt");
         
         // Calculate object center from aligned_bbox
         let object_center = {
@@ -862,12 +876,6 @@ impl WindowContext {
                 // For final waypoint, use optimal object viewing position (same as object search)
                 if let Some((target_center, optimal_camera_pos, object_size, _)) = self.highlight_renderer.get_first_object_viewing_info() {
                     let look_dir = (target_center - optimal_camera_pos).normalize();
-                    let projected_look = look_dir - look_dir.dot(ground_normal) * ground_normal;
-                    let final_look_direction = if projected_look.magnitude() > 0.001 {
-                        projected_look.normalize()
-                    } else {
-                        look_dir
-                    };
                     
                     let obj_projection = crate::camera::PerspectiveProjection {
                         fovx: Rad::from(Deg(50.0)),
@@ -878,17 +886,11 @@ impl WindowContext {
                     };
                     
                     log::info!("  Final waypoint: using optimal object viewing position");
-                    (Vector3::from(optimal_camera_pos.to_vec()), final_look_direction, obj_projection)
+                    (Vector3::from(optimal_camera_pos.to_vec()), look_dir, obj_projection)
                 } else {
                     // Fallback if no optimal position available - use waypoint position directly
                     let camera_pos = waypoint_pos;
                     let look_dir = (object_center - waypoint_pos).normalize();
-                    let projected_look = look_dir - look_dir.dot(ground_normal) * ground_normal;
-                    let final_look_direction = if projected_look.magnitude() > 0.001 {
-                        projected_look.normalize()
-                    } else {
-                        look_dir
-                    };
                     
                     let nav_projection = crate::camera::PerspectiveProjection {
                         fovx: Rad::from(Deg(70.0)),
@@ -898,12 +900,9 @@ impl WindowContext {
                         fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
                     };
                     
-                    (camera_pos, final_look_direction, nav_projection)
+                    (camera_pos, look_dir, nav_projection)
                 }
             } else {
-                // For regular waypoints, use the exact waypoint position (preserving MCP server height)
-                let camera_pos = waypoint_pos;
-                
                 // For regular waypoints, use the exact waypoint position (preserving MCP server height)
                 let camera_pos = waypoint_pos;
                 
@@ -918,25 +917,10 @@ impl WindowContext {
                 log::info!("  Waypoint {} -> {}: forward_direction = ({:.3}, {:.3}, {:.3})", 
                            i, i + 1, forward_direction.x, forward_direction.y, forward_direction.z);
                 
-                // Project forward direction onto ground plane to keep camera parallel to ground
-                // This is crucial for preventing tilting - the camera will always look parallel to the ground
-                let projected_forward = forward_direction - forward_direction.dot(ground_normal) * ground_normal;
-                let look_direction = if projected_forward.magnitude() > 0.001 {
-                    projected_forward.normalize()
-                } else {
-                    // Fallback direction if forward direction is too vertical
-                    // Use a horizontal direction perpendicular to ground normal
-                    let fallback = if ground_normal.y.abs() < 0.9 {
-                        Vector3::new(0.0, 1.0, 0.0).cross(ground_normal).normalize()
-                    } else {
-                        Vector3::new(1.0, 0.0, 0.0).cross(ground_normal).normalize()
-                    };
-                    fallback
-                };
+                // Use the forward direction directly (Y-up rotation handles tilt prevention)
+                let look_direction = forward_direction;
                 
-                log::info!("  Ground normal: ({:.3}, {:.3}, {:.3})", 
-                           ground_normal.x, ground_normal.y, ground_normal.z);
-                log::info!("  Projected look_direction = ({:.3}, {:.3}, {:.3})", 
+                log::info!("  Look direction = ({:.3}, {:.3}, {:.3})", 
                            look_direction.x, look_direction.y, look_direction.z);
                 
                 let nav_projection = crate::camera::PerspectiveProjection {
@@ -950,9 +934,8 @@ impl WindowContext {
                 (camera_pos, look_direction, nav_projection)
             };
             
-            // Create camera rotation using ground plane normal as up vector
-            // Use the robust rotation function that handles non-standard up directions
-            let rotation = create_look_at_rotation(Point3::from_vec(camera_pos), Point3::from_vec(camera_pos + look_direction), ground_normal);
+            // Create camera rotation using Y-up to prevent tilt
+            let rotation = create_look_at_rotation(Point3::from_vec(camera_pos), Point3::from_vec(camera_pos + look_direction), Vector3::new(0.0, 1.0, 0.0));
             
             let camera = PerspectiveCamera::new(
                 Point3::from_vec(camera_pos),
@@ -967,8 +950,8 @@ impl WindowContext {
                        look_direction.x, look_direction.y, look_direction.z);
         }
         
-        // Set controller to use ground plane for consistent controls
-        self.controller.up = Some(ground_normal);
+        // Controller always uses Y-up to prevent tilt during user interaction
+        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
         
         // Create simple navigation sequence
         let seconds_per_waypoint = 1.0; // 1 second per waypoint for smooth motion
@@ -985,9 +968,10 @@ impl WindowContext {
         self.animation.take();
         self.animation = Some((animation, true));
         
-        log::info!("✅ Started elegant path animation: {} waypoints, {:.1}s duration", 
+        log::info!("✅ Started path animation: {} waypoints, {:.1}s duration", 
                    reversed_waypoints.len(), total_duration.as_secs_f32());
         log::info!("   Camera follows exact path waypoints, maintaining MCP server specified heights");
+        log::info!("   Controller uses Y-up to prevent tilt during user interaction");
     }
     
 
