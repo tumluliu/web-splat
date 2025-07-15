@@ -805,8 +805,8 @@ impl WindowContext {
         // Set controller center to the object center for proper orbiting
         self.controller.center = target_center;
         
-        // Switch controller to Y-up for navigation to prevent tilt
-        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
+        // Update controller's up vector to match scene's ground up direction
+        self.controller.up = Some(ground_up);
         
         // Create the ground-aligned camera
         let final_camera = PerspectiveCamera::new(
@@ -944,11 +944,32 @@ impl WindowContext {
                     projected_forward.normalize()
                 } else {
                     // Fallback direction if forward direction is too vertical
-                    // Use a horizontal direction perpendicular to ground normal
-                    let fallback = if ground_normal.y.abs() < 0.9 {
-                        Vector3::new(0.0, 1.0, 0.0).cross(ground_normal).normalize()
+                    // Use a direction perpendicular to ground normal derived from scene coordinate system
+                    let fallback = if let Some(scene) = &self.scene {
+                        // Use scene's first camera's right direction as basis for fallback
+                        if let Some(first_camera) = scene.camera(0) {
+                            let scene_camera: PerspectiveCamera = first_camera.into();
+                            let rotation_matrix: cgmath::Matrix3<f32> = scene_camera.rotation.into();
+                            let scene_right = Vector3::new(rotation_matrix.x.x, rotation_matrix.x.y, rotation_matrix.x.z);
+                            
+                            // Project scene's right direction onto plane perpendicular to ground normal
+                            let projected_right = scene_right - scene_right.dot(ground_normal) * ground_normal;
+                            if projected_right.magnitude() > 0.001 {
+                                projected_right.normalize()
+                            } else {
+                                // Last resort: use cross product with a different scene vector
+                                let scene_forward = Vector3::new(rotation_matrix.z.x, rotation_matrix.z.y, rotation_matrix.z.z);
+                                scene_forward.cross(ground_normal).normalize()
+                            }
+                        } else {
+                            // No cameras available, use generic perpendicular
+                            let temp = Vector3::new(1.0, 0.0, 0.0);
+                            (temp - temp.dot(ground_normal) * ground_normal).normalize()
+                        }
                     } else {
-                        Vector3::new(1.0, 0.0, 0.0).cross(ground_normal).normalize()
+                        // No scene available, use generic perpendicular
+                        let temp = Vector3::new(1.0, 0.0, 0.0);
+                        (temp - temp.dot(ground_normal) * ground_normal).normalize()
                     };
                     fallback
                 };
@@ -986,8 +1007,8 @@ impl WindowContext {
                        look_direction.x, look_direction.y, look_direction.z);
         }
         
-        // Switch controller to Y-up for path navigation to prevent tilt
-        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
+        // Set controller to use ground plane for consistent controls
+        self.controller.up = Some(ground_normal);
         
         // Create simple navigation sequence
         let seconds_per_waypoint = 1.0; // 1 second per waypoint for smooth motion
