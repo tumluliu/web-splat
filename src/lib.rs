@@ -378,7 +378,10 @@ impl WindowContext {
 
         let mut controller = CameraController::new(0.1, 0.05);
         controller.center = pc.center();
-        controller.up = Some(controller_up_direction);
+        controller.up = Some(scene_ground_up_direction);  // Use scene's up direction for initial view
+        
+        log::info!("Controller initialized with scene ground up direction: ({:.3}, {:.3}, {:.3})", 
+                   scene_ground_up_direction.x, scene_ground_up_direction.y, scene_ground_up_direction.z);
         
         let ui_renderer = ui_renderer::EguiWGPU::new(device, surface_format, &window);
 
@@ -786,8 +789,9 @@ impl WindowContext {
         // Set controller center to the object center for proper orbiting
         self.controller.center = target_center;
         
-        // Update controller's up vector to match scene's ground up direction
-        self.controller.up = Some(ground_up);
+        // Switch controller to Y-up for navigation to prevent tilt during user interaction
+        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
+        log::info!("Controller switched to Y-up for navigation to prevent tilt");
         
         // Create the ground-aligned camera
         let final_camera = PerspectiveCamera::new(
@@ -967,8 +971,9 @@ impl WindowContext {
                        look_direction.x, look_direction.y, look_direction.z);
         }
         
-        // Set controller to use ground plane for consistent controls
-        self.controller.up = Some(ground_normal);
+        // Switch controller to Y-up for path navigation to prevent tilt
+        self.controller.up = Some(Vector3::new(0.0, 1.0, 0.0));
+        log::info!("Controller switched to Y-up for path navigation to prevent tilt");
         
         // Create simple navigation sequence
         let seconds_per_waypoint = 1.0; // 1 second per waypoint for smooth motion
