@@ -365,7 +365,7 @@ pub async fn send_chat_message_mcp(
 }
 
 /// Helper function to parse MCP response that handles multiple formats
-fn parse_mcp_response(
+pub fn parse_mcp_response(
     response_text: &str,
 ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
     #[derive(Debug, Clone, Deserialize)]

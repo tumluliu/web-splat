@@ -7,7 +7,7 @@ use rust_mcp_sdk::mcp_client::{client_runtime, ClientHandler, ClientRuntime};
 #[cfg(not(target_arch = "wasm32"))]
 use rust_mcp_sdk::schema::{
     ClientCapabilities, Implementation, InitializeRequestParams, CallToolRequestParams,
-    LATEST_PROTOCOL_VERSION,
+    LATEST_PROTOCOL_VERSION, CallToolResult,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use rust_mcp_sdk::{ClientSseTransport, ClientSseTransportOptions, McpClient};
@@ -55,6 +55,7 @@ impl ClientHandler for MCPClientHandler {
 pub struct MCPClient {
     client: Arc<ClientRuntime>,
     response_receiver: Receiver<(String, McpResponse)>,
+    last_tool_result: Option<CallToolResult>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -86,6 +87,7 @@ impl MCPClient {
         Ok(Self {
             client: Arc::clone(&client),
             response_receiver,
+            last_tool_result: None,
         })
     }
 
@@ -93,7 +95,7 @@ impl MCPClient {
         self.client.clone().start().await
     }
 
-    pub async fn send_message(&self, message: String, current_location: [f32; 3]) -> SdkResult<()> {
+    pub async fn send_message(&mut self, message: String, current_location: [f32; 3]) -> SdkResult<()> {
         // Create tool call with the request data
         let params = serde_json::json!({
             "message": message,
@@ -111,15 +113,87 @@ impl MCPClient {
 
         log::info!("🔧 MCP Tool call result: {:?}", result);
         
-        // For now, we'll create a mock response in the receive_response method
-        // since we don't have a real MCP server that returns the expected format
+        // Store the result for later retrieval
+        self.last_tool_result = Some(result);
         
         Ok(())
     }
 
     pub async fn receive_response(&mut self) -> Option<(String, McpResponse)> {
-        // For now, return a mock response since we don't have a real MCP server
-        // In a real implementation, this would wait for the actual response from the server
+        // Try to get a response from the channel first
+        if let Ok((message, response)) = self.response_receiver.try_recv() {
+            return Some((message, response));
+        }
+
+        // Process the last tool result if available
+        if let Some(tool_result) = self.last_tool_result.take() {
+            log::info!("🔧 Processing tool result: {:?}", tool_result);
+            
+            // Extract the content from the tool result
+            if let Some(content) = tool_result.content.first() {
+                match content.as_text_content() {
+                    Ok(text_content) => {
+                        log::info!("📝 Tool response text: {}", text_content.text);
+                        
+                        // Try to parse the response as JSON
+                        match serde_json::from_str::<serde_json::Value>(&text_content.text) {
+                            Ok(json_value) => {
+                                log::info!("✅ Parsed JSON response: {:?}", json_value);
+                                
+                                // Try to parse as our McpResponse format
+                                match serde_json::from_value::<McpResponse>(json_value.clone()) {
+                                    Ok(mcp_response) => {
+                                        log::info!("✅ Successfully parsed as McpResponse");
+                                        return Some(("Riemind Response".to_string(), mcp_response));
+                                    }
+                                    Err(e) => {
+                                        log::warn!("⚠️ Failed to parse as McpResponse: {}", e);
+                                        
+                                        // Try to parse using the existing parse_mcp_response function
+                                        match crate::chat::parse_mcp_response(&text_content.text) {
+                                            Ok(mcp_response) => {
+                                                log::info!("✅ Successfully parsed using parse_mcp_response");
+                                                return Some(("Riemind Response".to_string(), mcp_response));
+                                            }
+                                            Err(e) => {
+                                                log::warn!("⚠️ Failed to parse using parse_mcp_response: {}", e);
+                                                
+                                                // Create a text-only response
+                                                let text_response = McpResponse {
+                                                    answer: Vec::new(),
+                                                    paths: Vec::new(),
+                                                    scene_normal_vector: None,
+                                                    text_answer: Some(text_content.text.clone()),
+                                                };
+                                                return Some(("Riemind Response".to_string(), text_response));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("⚠️ Failed to parse as JSON: {}", e);
+                                
+                                // Create a text-only response
+                                let text_response = McpResponse {
+                                    answer: Vec::new(),
+                                    paths: Vec::new(),
+                                    scene_normal_vector: None,
+                                    text_answer: Some(text_content.text.clone()),
+                                };
+                                return Some(("Riemind Response".to_string(), text_response));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("⚠️ Failed to extract text content: {}", e);
+                    }
+                }
+            }
+        }
+
+        // Fallback to mock response if no real response is available
+        log::warn!("❌ No real response available, using mock response");
         let mock_response = McpResponse {
             answer: vec![
                 SceneObject {
@@ -214,13 +288,59 @@ mod tests {
     async fn test_mcp_client_creation() {
         // This test verifies that we can create an MCP client
         // Note: This will fail if no MCP server is running, but that's expected
-        let result = MCPClient::new("http://localhost:3001/sse".to_string()).await;
+        let result = MCPClient::new("http://localhost:8080/sse".to_string()).await;
         match result {
             Ok(_client) => {
                 println!("✅ MCP client created successfully");
             }
             Err(e) => {
                 println!("⚠️  MCP client creation failed (expected if no server running): {}", e);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn test_mcp_client_with_riemind() {
+        // Test with the actual Riemind server
+        let result = MCPClient::new("http://localhost:8080/sse".to_string()).await;
+        match result {
+            Ok(mut client) => {
+                println!("✅ MCP client created successfully");
+                
+                // Try to start the client
+                match client.start().await {
+                    Ok(_) => {
+                        println!("✅ MCP client started successfully");
+                        
+                        // Try to send a test message
+                        match client.send_message("where is the coffee machine?".to_string(), [0.0, 1.0, 0.0]).await {
+                            Ok(_) => {
+                                println!("✅ Message sent successfully");
+                                
+                                // Try to receive a response
+                                match client.receive_response().await {
+                                    Some((message, response)) => {
+                                        println!("✅ Received response: {}", message);
+                                        println!("Response: {:?}", response);
+                                    }
+                                    None => {
+                                        println!("⚠️  No response received");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                println!("⚠️  Failed to send message: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("⚠️  Failed to start MCP client: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("⚠️  MCP client creation failed: {}", e);
             }
         }
     }
