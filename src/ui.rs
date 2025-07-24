@@ -973,8 +973,39 @@ pub fn chat_ui(
 }
 
 /// Create mock response for testing - replace with real async handling
-pub fn create_mock_response(_message: &str) -> McpResponse {
-    // Simple fallback mock response with coffee machine example
+pub fn create_mock_response(message: &str) -> McpResponse {
+    let message_lower = message.to_lowercase();
+    
+    // Check if this is a counting query
+    let counting_keywords = [
+        "how many", "count", "number of", "total", "how much", "quantity", "amount of"
+    ];
+    
+    if counting_keywords.iter().any(|&keyword| message_lower.contains(keyword)) {
+        // Generate counting response based on the query
+        let count_answer = if message_lower.contains("chair") {
+            "4"
+        } else if message_lower.contains("table") {
+            "2"
+        } else if message_lower.contains("appliance") || message_lower.contains("machine") {
+            "3"
+        } else if message_lower.contains("furniture") {
+            "7"
+        } else if message_lower.contains("room") {
+            "3"
+        } else {
+            "6" // Generic fallback count
+        };
+        
+        return McpResponse {
+            answer: Vec::new(),
+            paths: Vec::new(),
+            scene_normal_vector: Some("[0.0,1.0,0.0]".to_string()),
+            text_answer: Some(count_answer.to_string()),
+        };
+    }
+    
+    // Simple fallback mock response with coffee machine example for object queries
     use std::collections::HashMap;
 
     let mut attributes = HashMap::new();
@@ -1003,11 +1034,37 @@ pub fn create_mock_response(_message: &str) -> McpResponse {
         answer: vec![object],
         paths: Vec::new(),
         scene_normal_vector: Some("[0.0,1.0,0.0]".to_string()), // Y-up for testing
+        text_answer: None,
     }
 }
 
 /// Format MCP response for display
 pub fn format_response(response: &McpResponse, current_location: [f32; 3]) -> String {
+    // Handle simple text/number responses first (highest priority for counting questions)
+    if let Some(text_answer) = &response.text_answer {
+        // Check if this looks like a number (counting response)
+        let trimmed = text_answer.trim();
+        if let Ok(count) = trimmed.parse::<i32>() {
+            // Format counting responses with emoji and context
+            return format!(
+                "🔢 **{}**\n📍 Query answered from position: ({:.1}, {:.1}, {:.1})",
+                if count == 1 {
+                    format!("There is {} item", count)
+                } else {
+                    format!("There are {} items", count)
+                },
+                current_location[0], current_location[1], current_location[2]
+            );
+        } else {
+            // Format other text responses elegantly
+            return format!(
+                "💬 {}\n📍 Query answered from position: ({:.1}, {:.1}, {:.1})",
+                text_answer,
+                current_location[0], current_location[1], current_location[2]
+            );
+        }
+    }
+    
     // Handle navigation responses (paths)
     if !response.paths.is_empty() {
         let path_responses: Vec<String> = response

@@ -653,6 +653,15 @@ impl WindowContext {
     }
 
     fn update_highlights_and_animate(&mut self, response: McpResponse) {
+        // Check if this is a simple text response (counting questions, etc.)
+        if let Some(text_answer) = &response.text_answer {
+            log::info!("💬 Simple text response received: '{}'", text_answer);
+            // For simple text responses, just clear any existing highlights
+            // No camera animation or object highlighting needed
+            self.highlight_renderer.clear_highlights();
+            return;
+        }
+        
         // Log current camera position for debugging
         let camera_pos = self.splatting_args.camera.position;
         log::info!("Camera position: ({:.3}, {:.3}, {:.3})", camera_pos.x, camera_pos.y, camera_pos.z);
@@ -886,8 +895,42 @@ impl WindowContext {
                 log::info!("  Waypoint {} -> {}: forward_direction = ({:.3}, {:.3}, {:.3})", 
                            i, i + 1, forward_direction.x, forward_direction.y, forward_direction.z);
                 
-                // Use the forward direction directly (Y-up rotation handles tilt prevention)
-                let look_direction = forward_direction;
+                // Project forward direction onto ground plane to keep camera parallel to ground
+                // This is crucial for preventing tilting - the camera will always look parallel to the ground
+                let projected_forward = forward_direction - forward_direction.dot(ground_normal) * ground_normal;
+                let look_direction = if projected_forward.magnitude() > 0.001 {
+                    projected_forward.normalize()
+                } else {
+                    // Fallback direction if forward direction is too vertical
+                    // Use a direction perpendicular to ground normal derived from scene coordinate system
+                    let fallback = if let Some(scene) = &self.scene {
+                        // Use scene's first camera's right direction as basis for fallback
+                        if let Some(first_camera) = scene.camera(0) {
+                            let scene_camera: PerspectiveCamera = first_camera.into();
+                            let rotation_matrix: cgmath::Matrix3<f32> = scene_camera.rotation.into();
+                            let scene_right = Vector3::new(rotation_matrix.x.x, rotation_matrix.x.y, rotation_matrix.x.z);
+                            
+                            // Project scene's right direction onto plane perpendicular to ground normal
+                            let projected_right = scene_right - scene_right.dot(ground_normal) * ground_normal;
+                            if projected_right.magnitude() > 0.001 {
+                                projected_right.normalize()
+                            } else {
+                                // Last resort: use cross product with a different scene vector
+                                let scene_forward = Vector3::new(rotation_matrix.z.x, rotation_matrix.z.y, rotation_matrix.z.z);
+                                scene_forward.cross(ground_normal).normalize()
+                            }
+                        } else {
+                            // No cameras available, use generic perpendicular
+                            let temp = Vector3::new(1.0, 0.0, 0.0);
+                            (temp - temp.dot(ground_normal) * ground_normal).normalize()
+                        }
+                    } else {
+                        // No scene available, use generic perpendicular
+                        let temp = Vector3::new(1.0, 0.0, 0.0);
+                        (temp - temp.dot(ground_normal) * ground_normal).normalize()
+                    };
+                    fallback
+                };
                 
                 log::info!("  Look direction = ({:.3}, {:.3}, {:.3})", 
                            look_direction.x, look_direction.y, look_direction.z);
