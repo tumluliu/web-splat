@@ -297,6 +297,73 @@ pub async fn send_chat_message(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn send_chat_message_mcp(
+    message: String,
+    server_url: &str,
+    current_location: [f32; 3],
+) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
+    use crate::mcp_client::MCPClient;
+    
+    log::info!("🔥 send_chat_message_mcp called");
+    log::info!("📍 Server URL: {}", server_url);
+    log::info!("💬 Message: {}", message);
+    log::info!(
+        "📍 Current camera location: [{:.3}, {:.3}, {:.3}]",
+        current_location[0],
+        current_location[1],
+        current_location[2]
+    );
+
+    // Convert HTTP URL to SSE URL format
+    let sse_url = if server_url.ends_with("/sse") {
+        server_url.to_string()
+    } else {
+        format!("{}/sse", server_url.trim_end_matches('/'))
+    };
+
+    log::info!("🔄 Converting to SSE URL: {}", sse_url);
+
+    // Create MCP client
+    let mut mcp_client = MCPClient::new(sse_url).await
+        .map_err(|e| format!("Failed to create MCP client: {}", e))?;
+
+    // Start the client
+    mcp_client.start().await
+        .map_err(|e| format!("Failed to start MCP client: {}", e))?;
+
+    // Send the message
+    mcp_client.send_message(message.clone(), current_location).await
+        .map_err(|e| format!("Failed to send message: {}", e))?;
+
+    // Wait for response
+    match mcp_client.receive_response().await {
+        Some((_original_message, response)) => {
+            log::info!("✅ Successfully received MCP response");
+            Ok(response)
+        }
+        None => {
+            log::warn!("❌ No response received from MCP server");
+            Ok(McpResponse {
+                answer: Vec::new(),
+                paths: Vec::new(),
+                scene_normal_vector: None,
+                text_answer: Some("No response from MCP server".to_string()),
+            })
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn send_chat_message_mcp(
+    _message: String,
+    _server_url: &str,
+    _current_location: [f32; 3],
+) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
+    // WASM version - return error indicating MCP is not supported
+    Err("MCP client is not supported in WASM builds".into())
+}
+
 /// Helper function to parse MCP response that handles multiple formats
 fn parse_mcp_response(
     response_text: &str,

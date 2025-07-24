@@ -171,6 +171,9 @@ pub use pointcloud::PointCloud;
 mod chat;
 pub use chat::{ChatState, McpResponse, SceneObject, ScenePath};
 
+mod mcp_client;
+pub use mcp_client::{MCPClient, MCPClientHandler};
+
 pub mod io;
 
 mod renderer;
@@ -554,36 +557,48 @@ impl WindowContext {
         self.chat_state.add_message(message.clone(), true);
         self.chat_state.is_sending = true;
         
-        log::info!("User message added, making HTTP request to server");
+        log::info!("User message added, making MCP request to server");
         
-        // Make HTTP request to the actual server
+        // Make MCP request to the actual server
         let server_url = self.chat_state.mcp_server_url.clone();
         
-        log::info!("Sending HTTP request to: {}/query with message: {}", server_url, message);
+        log::info!("Sending MCP request to: {} with message: {}", server_url, message);
         
-        // Spawn async task to make HTTP request
+        // Spawn async task to make MCP request
         #[cfg(not(target_arch = "wasm32"))]
         {
             let msg_clone = message.clone();
             let camera_pos = self.splatting_args.camera.position;
             let current_location = [camera_pos.x, camera_pos.y, camera_pos.z];
             let rt = tokio::runtime::Runtime::new().unwrap();
-            match rt.block_on(crate::chat::send_chat_message(msg_clone, &server_url, current_location)) {
+            
+            // Try MCP client first, fall back to HTTP if it fails
+            match rt.block_on(crate::chat::send_chat_message_mcp(msg_clone.clone(), &server_url, current_location)) {
                 Ok(response) => {
-                    log::info!("Received HTTP response successfully");
+                    log::info!("Received MCP response successfully");
                     self.pending_chat_responses.push((message, response));
                 }
                 Err(e) => {
-                    log::warn!("HTTP request failed: {}, falling back to mock response", e);
-                    let mock_response = ui::create_mock_response(&message);
-                    self.pending_chat_responses.push((message, mock_response));
+                    log::warn!("MCP request failed: {}, falling back to HTTP", e);
+                    // Fall back to HTTP request
+                    match rt.block_on(crate::chat::send_chat_message(msg_clone, &server_url, current_location)) {
+                        Ok(response) => {
+                            log::info!("Received HTTP response successfully");
+                            self.pending_chat_responses.push((message, response));
+                        }
+                        Err(e) => {
+                            log::warn!("HTTP request also failed: {}, using mock response", e);
+                            let mock_response = ui::create_mock_response(&message);
+                            self.pending_chat_responses.push((message, mock_response));
+                        }
+                    }
                 }
             }
         }
         
         #[cfg(target_arch = "wasm32")]
         {
-            log::info!("WASM build: making HTTP request");
+            log::info!("WASM build: making HTTP request (MCP not yet supported in WASM)");
             
             // Store a reference to the pending responses that we can update from the async closure
             // We'll use a polling approach - the async task will store the response in a static location
@@ -897,7 +912,7 @@ impl WindowContext {
                 
                 // Project forward direction onto ground plane to keep camera parallel to ground
                 // This is crucial for preventing tilting - the camera will always look parallel to the ground
-                let projected_forward = forward_direction - forward_direction.dot(ground_normal) * ground_normal;
+                let projected_forward = forward_direction - forward_direction.dot(self.ground_up_direction) * self.ground_up_direction;
                 let look_direction = if projected_forward.magnitude() > 0.001 {
                     projected_forward.normalize()
                 } else {
@@ -911,23 +926,23 @@ impl WindowContext {
                             let scene_right = Vector3::new(rotation_matrix.x.x, rotation_matrix.x.y, rotation_matrix.x.z);
                             
                             // Project scene's right direction onto plane perpendicular to ground normal
-                            let projected_right = scene_right - scene_right.dot(ground_normal) * ground_normal;
+                            let projected_right = scene_right - scene_right.dot(self.ground_up_direction) * self.ground_up_direction;
                             if projected_right.magnitude() > 0.001 {
                                 projected_right.normalize()
                             } else {
                                 // Last resort: use cross product with a different scene vector
                                 let scene_forward = Vector3::new(rotation_matrix.z.x, rotation_matrix.z.y, rotation_matrix.z.z);
-                                scene_forward.cross(ground_normal).normalize()
+                                scene_forward.cross(self.ground_up_direction).normalize()
                             }
                         } else {
                             // No cameras available, use generic perpendicular
                             let temp = Vector3::new(1.0, 0.0, 0.0);
-                            (temp - temp.dot(ground_normal) * ground_normal).normalize()
+                            (temp - temp.dot(self.ground_up_direction) * self.ground_up_direction).normalize()
                         }
                     } else {
                         // No scene available, use generic perpendicular
                         let temp = Vector3::new(1.0, 0.0, 0.0);
-                        (temp - temp.dot(ground_normal) * ground_normal).normalize()
+                        (temp - temp.dot(self.ground_up_direction) * self.ground_up_direction).normalize()
                     };
                     fallback
                 };
