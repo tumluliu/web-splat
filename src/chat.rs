@@ -200,7 +200,6 @@ pub async fn send_chat_message(
 
     let request_body = serde_json::json!({
         "messages": message,
-        "context": "3d_scene_understanding",
         "current_location": current_location
     });
 
@@ -267,7 +266,6 @@ pub async fn send_chat_message(
 
     let request_body = serde_json::json!({
         "messages": message,
-        "context": "3d_scene_understanding",
         "current_location": current_location
     });
 

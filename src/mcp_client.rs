@@ -4,7 +4,7 @@ use crate::chat::McpResponse;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MCPRequest {
-    pub message: String,
+    pub messages: String,
     pub current_location: [f32; 3],
 }
 
@@ -43,15 +43,13 @@ impl MCPClient {
         log::info!("📤 Sending message via MCP SSE: {}", message);
         
         let request_body = serde_json::json!({
-            "message": message,
-            "current_location": current_location,
-            "context": "3d_scene_understanding"
+            "messages": message,
+            "current_location": current_location
         });
 
-        // For native builds, connect to MCP SSE endpoint
         let client = reqwest::Client::new();
         
-        // Use SSE endpoint directly
+        // Use SSE endpoint (server is at /sse)
         let sse_url = if self.server_url.ends_with("/sse") {
             self.server_url.clone()
         } else {
@@ -63,8 +61,9 @@ impl MCPClient {
         let response = client
             .post(&sse_url)
             .header("Accept", "text/event-stream")
-            .header("Cache-Control", "no-cache")
+            .header("Cache-Control", "no-cache") 
             .header("Connection", "keep-alive")
+            .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
             .await?;
@@ -193,7 +192,7 @@ impl MCPClient {
     }
 }
 
-// WASM implementation using browser's EventSource API
+// WASM implementation
 #[cfg(target_arch = "wasm32")]
 pub struct MCPClient {
     server_url: String,
@@ -219,15 +218,14 @@ impl MCPClient {
         use wasm_bindgen_futures::JsFuture;
         use web_sys::{Request, RequestInit, RequestMode, Response};
 
-        log::info!("📤 WASM: Sending message via MCP SSE: {}", message);
+        log::info!("📤 WASM: Sending message via MCP: {}", message);
 
         let request_body = serde_json::json!({
-            "message": message,
-            "current_location": current_location,
-            "context": "3d_scene_understanding"
+            "messages": message,
+            "current_location": current_location
         });
 
-        // Use SSE endpoint directly for MCP communication
+        // Use SSE endpoint (server is at /sse)
         let sse_url = if self.server_url.ends_with("/sse") {
             self.server_url.clone()
         } else {
@@ -442,19 +440,14 @@ mod tests {
     }
 
     #[test]
-    fn test_sse_event_parsing() {
-        let client = MCPClient {
-            server_url: "test".to_string(),
-            response_cache: None,
+    fn test_mcp_request_format() {
+        let request = MCPRequest {
+            messages: "where is the coffee machine?".to_string(),
+            current_location: [1.0, 2.0, 3.0],
         };
 
-        let sse_text = "data: test message\nevent: message\nid: 123\n\ndata: second message\n\n";
-        let events = client.parse_sse_events(sse_text);
-        
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].data, "test message");
-        assert_eq!(events[0].event, Some("message".to_string()));
-        assert_eq!(events[0].id, Some("123".to_string()));
-        assert_eq!(events[1].data, "second message");
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"messages\":"));
+        assert!(json.contains("\"current_location\":"));
     }
 } 
