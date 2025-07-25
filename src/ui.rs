@@ -665,7 +665,7 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
         });
 
     // Chat UI - handle separately to avoid borrowing conflicts
-    let (chat_message, new_input, clear_highlights, new_server_url, new_font_size) = chat_ui(state, ctx);
+    let (chat_message, new_input, clear_highlights, new_server_url, new_font_size, new_use_mcp_client) = chat_ui(state, ctx);
 
     // Update chat input state
     state.chat_state.current_input = new_input;
@@ -675,6 +675,17 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
         state.chat_state.font_size = new_font_size;
     }
 
+    // Update MCP client preference if changed
+    if state.chat_state.use_mcp_client != new_use_mcp_client {
+        state.chat_state.use_mcp_client = new_use_mcp_client;
+        log::info!("🔗 MCP client preference updated to: {}", state.chat_state.use_mcp_client);
+        
+        // Reset connection status when changing protocol
+        if new_use_mcp_client {
+            state.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Disconnected);
+        }
+    }
+
     // Update server URL if changed
     if state.chat_state.mcp_server_url != new_server_url {
         state.chat_state.mcp_server_url = new_server_url;
@@ -682,6 +693,9 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
             "MCP server URL updated to: {}",
             state.chat_state.mcp_server_url
         );
+
+        // Reset connection status when changing URL
+        state.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Disconnected);
 
         // Save to localStorage in WASM builds
         #[cfg(target_arch = "wasm32")]
@@ -806,12 +820,13 @@ fn optional_checkbox(ui: &mut egui::Ui, opt: &mut Option<bool>, default: bool) {
 pub fn chat_ui(
     state: &WindowContext,
     ctx: &egui::Context,
-) -> (Option<String>, String, bool, String, f32) {
+) -> (Option<String>, String, bool, String, f32, bool) {
     let mut message_to_send = None;
     let mut current_input = state.chat_state.current_input.clone();
     let mut clear_highlights = false;
     let mut server_url = state.chat_state.mcp_server_url.clone();
     let mut font_size = state.chat_state.font_size;
+    let mut use_mcp_client = state.chat_state.use_mcp_client;
 
     egui::Window::new("💬 3D Scene Chat")
         .default_width(450.)
@@ -933,6 +948,19 @@ pub fn chat_ui(
                 }
             });
 
+            // Connection status display
+            ui.horizontal(|ui| {
+                ui.label("Connection:");
+                let status_text = state.chat_state.get_connection_status_text();
+                let status_color = match state.chat_state.mcp_connection_status {
+                    crate::chat::MCPConnectionStatus::Connected => egui::Color32::GREEN,
+                    crate::chat::MCPConnectionStatus::Connecting => egui::Color32::YELLOW,
+                    crate::chat::MCPConnectionStatus::Error(_) => egui::Color32::RED,
+                    crate::chat::MCPConnectionStatus::Disconnected => egui::Color32::GRAY,
+                };
+                ui.colored_label(status_color, status_text);
+            });
+
             // Server settings
             ui.collapsing("Settings", |ui| {
                 ui.horizontal(|ui| {
@@ -944,7 +972,13 @@ pub fn chat_ui(
                 });
 
                 ui.horizontal(|ui| {
-                    ui.label("Status:");
+                    ui.label("Protocol:");
+                    ui.radio_value(&mut use_mcp_client, true, "MCP Client");
+                    ui.radio_value(&mut use_mcp_client, false, "HTTP Only");
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("URL Status:");
                     if server_url.starts_with("http://") || server_url.starts_with("https://") {
                         ui.colored_label(egui::Color32::GREEN, "✓ Valid URL format");
                     } else {
@@ -969,7 +1003,7 @@ pub fn chat_ui(
             });
         });
 
-    (message_to_send, current_input, clear_highlights, server_url, font_size)
+    (message_to_send, current_input, clear_highlights, server_url, font_size, use_mcp_client)
 }
 
 /// Create mock response for testing - replace with real async handling

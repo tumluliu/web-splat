@@ -47,6 +47,14 @@ pub struct McpResponse {
     pub text_answer: Option<String>, // For simple text/number responses like "6" or "There are 3 chairs"
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum MCPConnectionStatus {
+    Disconnected,
+    Connecting,
+    Connected,
+    Error(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct ChatState {
     pub messages: VecDeque<ChatMessage>,
@@ -56,6 +64,9 @@ pub struct ChatState {
     pub highlighted_path: Option<ScenePath>,
     pub mcp_server_url: String,
     pub font_size: f32,
+    pub mcp_connection_status: MCPConnectionStatus,
+    pub last_connection_attempt: Option<SystemTime>,
+    pub use_mcp_client: bool, // Whether to use MCP client or fallback to HTTP
     #[cfg(target_arch = "wasm32")]
     pub pending_request_id: Option<String>,
 }
@@ -70,6 +81,9 @@ impl Default for ChatState {
             highlighted_path: None,
             mcp_server_url: "http://localhost:8080".to_string(),
             font_size: 14.0, // Default font size
+            mcp_connection_status: MCPConnectionStatus::Disconnected,
+            last_connection_attempt: None,
+            use_mcp_client: true, // Default to trying MCP client first
             #[cfg(target_arch = "wasm32")]
             pending_request_id: None,
         }
@@ -117,6 +131,51 @@ impl ChatState {
                 path_response.path.len(),
                 path_response.object.name
             );
+        }
+    }
+
+    pub fn set_connection_status(&mut self, status: MCPConnectionStatus) {
+        if self.mcp_connection_status != status {
+            log::info!("🔗 MCP connection status changed: {:?} -> {:?}", self.mcp_connection_status, status);
+            self.mcp_connection_status = status;
+            
+            match &self.mcp_connection_status {
+                MCPConnectionStatus::Connected => {
+                    self.add_message("✅ Connected to MCP server".to_string(), false);
+                }
+                MCPConnectionStatus::Error(err) => {
+                    self.add_message(format!("❌ MCP connection error: {}", err), false);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn can_retry_connection(&self) -> bool {
+        match &self.mcp_connection_status {
+            MCPConnectionStatus::Disconnected | MCPConnectionStatus::Error(_) => {
+                if let Some(last_attempt) = self.last_connection_attempt {
+                    // Allow retry after 5 seconds
+                    last_attempt.elapsed().unwrap_or_default().as_secs() >= 5
+                } else {
+                    true
+                }
+            }
+            _ => false,
+        }
+    }
+
+    pub fn mark_connection_attempt(&mut self) {
+        self.last_connection_attempt = Some(SystemTime::now());
+        self.set_connection_status(MCPConnectionStatus::Connecting);
+    }
+
+    pub fn get_connection_status_text(&self) -> String {
+        match &self.mcp_connection_status {
+            MCPConnectionStatus::Disconnected => "⚪ Disconnected".to_string(),
+            MCPConnectionStatus::Connecting => "🟡 Connecting...".to_string(),
+            MCPConnectionStatus::Connected => "🟢 Connected".to_string(),
+            MCPConnectionStatus::Error(err) => format!("🔴 Error: {}", err),
         }
     }
 }
@@ -398,6 +457,99 @@ pub async fn send_chat_message_mcp(
                 text_answer: Some("No response from MCP server (WASM)".to_string()),
             })
         }
+    }
+}
+
+/// Enhanced async chat message handler that properly uses MCP client
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn send_chat_message_enhanced(
+    message: String,
+    server_url: &str,
+    current_location: [f32; 3],
+    use_mcp_client: bool,
+) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("🚀 Enhanced chat message handler called");
+    log::info!("📍 Server URL: {}", server_url);
+    log::info!("💬 Message: {}", message);
+    log::info!("🔗 Use MCP client: {}", use_mcp_client);
+    log::info!(
+        "📍 Current location: [{:.3}, {:.3}, {:.3}]",
+        current_location[0], current_location[1], current_location[2]
+    );
+
+    if use_mcp_client {
+        log::info!("🔧 Attempting MCP client connection...");
+        
+        // Try our new MCP client implementation
+        match send_chat_message_mcp(message.clone(), server_url, current_location).await {
+            Ok(response) => {
+                log::info!("✅ MCP client succeeded");
+                return Ok(response);
+            }
+            Err(e) => {
+                log::warn!("⚠️ MCP client failed: {}, falling back to HTTP", e);
+                // Fall back to HTTP
+                match send_chat_message(message, server_url, current_location).await {
+                    Ok(response) => {
+                        log::info!("✅ HTTP fallback succeeded");
+                        return Ok(response);
+                    }
+                    Err(http_err) => {
+                        log::error!("❌ Both MCP and HTTP failed. MCP: {}, HTTP: {}", e, http_err);
+                        return Err(format!("Both MCP and HTTP failed. MCP: {}, HTTP: {}", e, http_err).into());
+                    }
+                }
+            }
+        }
+    } else {
+        log::info!("🌐 Using HTTP client directly");
+        send_chat_message(message, server_url, current_location).await
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn send_chat_message_enhanced(
+    message: String,
+    server_url: &str,
+    current_location: [f32; 3],
+    use_mcp_client: bool,
+) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("🌐 Enhanced WASM chat message handler called");
+    log::info!("📍 Server URL: {}", server_url);
+    log::info!("💬 Message: {}", message);
+    log::info!("🔗 Use MCP client: {}", use_mcp_client);
+    log::info!(
+        "📍 Current location: [{:.3}, {:.3}, {:.3}]",
+        current_location[0], current_location[1], current_location[2]
+    );
+
+    if use_mcp_client {
+        log::info!("🔧 Attempting WASM MCP client...");
+        
+        // Try our new WASM-compatible MCP client implementation
+        match send_chat_message_mcp(message.clone(), server_url, current_location).await {
+            Ok(response) => {
+                log::info!("✅ WASM MCP client succeeded");
+                return Ok(response);
+            }
+            Err(e) => {
+                log::warn!("⚠️ WASM MCP client failed: {}, falling back to HTTP", e);
+                // Fall back to HTTP
+                match send_chat_message(message, server_url, current_location).await {
+                    Ok(response) => {
+                        log::info!("✅ WASM HTTP fallback succeeded");
+                        return Ok(response);
+                    }
+                    Err(http_err) => {
+                        log::error!("❌ Both WASM MCP and HTTP failed. MCP: {}, HTTP: {}", e, http_err);
+                        return Err(format!("Both MCP and HTTP failed. MCP: {}, HTTP: {}", e, http_err).into());
+                    }
+                }
+            }
+        }
+    } else {
+        log::info!("🌐 Using WASM HTTP client directly");
+        send_chat_message(message, server_url, current_location).await
     }
 }
 

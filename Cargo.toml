@@ -66,6 +66,9 @@ required-features = ["video"]
 [[example]]
 name = "test_mcp_client"
 
+[[example]]
+name = "test_enhanced_chat"
+
 [features]
 npz = ["dep:npyz"]
 video = []

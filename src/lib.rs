@@ -168,8 +168,8 @@ mod controller;
 pub use controller::CameraController;
 mod pointcloud;
 pub use pointcloud::PointCloud;
-mod chat;
-pub use chat::{ChatState, McpResponse, SceneObject, ScenePath};
+pub mod chat;
+pub use chat::{ChatState, McpResponse, SceneObject, ScenePath, MCPConnectionStatus};
 
 pub mod mcp_client;
 pub use mcp_client::MCPClient;
@@ -551,81 +551,80 @@ impl WindowContext {
     }
 
     fn handle_chat_message(&mut self, message: String) {
-        log::info!("handle_chat_message called with: {}", message);
+        log::info!("🚀 Enhanced handle_chat_message called with: {}", message);
         
         // Add user message and set sending state
         self.chat_state.add_message(message.clone(), true);
         self.chat_state.is_sending = true;
         
-        log::info!("User message added, making MCP request to server");
+        // Mark connection attempt if we're going to try MCP client
+        if self.chat_state.use_mcp_client {
+            self.chat_state.mark_connection_attempt();
+        }
         
-        // Make MCP request to the actual server
         let server_url = self.chat_state.mcp_server_url.clone();
+        let use_mcp_client = self.chat_state.use_mcp_client;
         
-        log::info!("Sending MCP request to: {} with message: {}", server_url, message);
+        log::info!("📤 Sending to: {} (MCP: {})", server_url, use_mcp_client);
         
-        // Spawn async task to make MCP request
+        // Get current camera position
+        let camera_pos = self.splatting_args.camera.position;
+        let current_location = [camera_pos.x, camera_pos.y, camera_pos.z];
+        
+        // Spawn async task for both native and WASM
         #[cfg(not(target_arch = "wasm32"))]
         {
             let msg_clone = message.clone();
-            let camera_pos = self.splatting_args.camera.position;
-            let current_location = [camera_pos.x, camera_pos.y, camera_pos.z];
+            let server_url_clone = server_url.clone();
+            
+            // Use async runtime with proper error handling
             let rt = tokio::runtime::Runtime::new().unwrap();
             
-            // Try MCP client first, fall back to HTTP if it fails
-            match rt.block_on(crate::chat::send_chat_message_mcp(msg_clone.clone(), &server_url, current_location)) {
+            // Use blocking approach for now (can be optimized later with channels)
+            match rt.block_on(crate::chat::send_chat_message_enhanced(
+                msg_clone, &server_url_clone, current_location, use_mcp_client
+            )) {
                 Ok(response) => {
-                    log::info!("Received MCP response successfully");
+                    log::info!("✅ Enhanced native request succeeded");
+                    self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Connected);
                     self.pending_chat_responses.push((message, response));
                 }
                 Err(e) => {
-                    log::warn!("MCP request failed: {}, falling back to HTTP", e);
-                    // Fall back to HTTP request
-                    match rt.block_on(crate::chat::send_chat_message(msg_clone, &server_url, current_location)) {
-                        Ok(response) => {
-                            log::info!("Received HTTP response successfully");
-                            self.pending_chat_responses.push((message, response));
-                        }
-                        Err(e) => {
-                            log::warn!("HTTP request also failed: {}, using mock response", e);
-                            let mock_response = ui::create_mock_response(&message);
-                            self.pending_chat_responses.push((message, mock_response));
-                        }
-                    }
+                    log::error!("❌ Enhanced native request failed: {}", e);
+                    self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Error(e.to_string()));
+                    // Use mock response as ultimate fallback
+                    let mock_response = ui::create_mock_response(&message);
+                    self.pending_chat_responses.push((message, mock_response));
                 }
             }
         }
         
         #[cfg(target_arch = "wasm32")]
         {
-            log::info!("WASM build: making HTTP request (MCP not yet supported in WASM)");
-            
-            // Store a reference to the pending responses that we can update from the async closure
-            // We'll use a polling approach - the async task will store the response in a static location
-            // and the main update loop will check for it
+            log::info!("🌐 WASM enhanced chat handling");
             
             let msg_clone = message.clone();
             let server_url_clone = server_url.clone();
-            let camera_pos = self.splatting_args.camera.position;
-            let current_location = [camera_pos.x, camera_pos.y, camera_pos.z];
             
             // Create a unique identifier for this request
             let request_id = format!("{}_{}", message.len(), chrono::Utc::now().timestamp_millis());
-            
-            // Store the request ID so we can match it with the response later
             self.chat_state.pending_request_id = Some(request_id.clone());
             
             wasm_bindgen_futures::spawn_local(async move {
-                log::info!("Starting WASM HTTP request...");
-                match crate::chat::send_chat_message(msg_clone.clone(), &server_url_clone, current_location).await {
+                log::info!("🔄 Starting enhanced WASM request...");
+                match crate::chat::send_chat_message_enhanced(
+                    msg_clone.clone(), 
+                    &server_url_clone, 
+                    current_location, 
+                    use_mcp_client
+                ).await {
                     Ok(response) => {
-                        log::info!("WASM HTTP request successful!");
-                        // Store the response in a global location that the main thread can access
+                        log::info!("✅ Enhanced WASM request successful!");
                         crate::chat::store_async_response(request_id, msg_clone, response);
                     }
                     Err(e) => {
-                        log::warn!("WASM HTTP request failed: {}, using fallback", e);
-                        // Store a fallback response
+                        log::error!("❌ Enhanced WASM request failed: {}", e);
+                        // Use mock response as fallback
                         let fallback = ui::create_mock_response(&msg_clone);
                         crate::chat::store_async_response(request_id, msg_clone, fallback);
                     }
@@ -633,7 +632,7 @@ impl WindowContext {
             });
         }
         
-        log::info!("Response queued for processing");
+        log::info!("📋 Enhanced chat message processing initiated");
     }
 
     fn process_pending_chat_responses(&mut self) {
@@ -642,8 +641,16 @@ impl WindowContext {
         {
             if let Some(request_id) = &self.chat_state.pending_request_id.clone() {
                 if let Some((message, response)) = crate::chat::check_async_response(request_id) {
-                    log::info!("Found async response, processing it");
+                    log::info!("✅ Found async WASM response, processing it");
                     self.chat_state.pending_request_id = None;
+                    
+                    // Update connection status based on response
+                    if response.text_answer.as_ref().map_or(false, |text| text.contains("error")) {
+                        self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Error("Request failed".to_string()));
+                    } else {
+                        self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Connected);
+                    }
+                    
                     self.pending_chat_responses.push((message, response));
                 }
             }
