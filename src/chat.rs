@@ -209,8 +209,8 @@ pub async fn send_chat_message(
         serde_json::to_string_pretty(&request_body).unwrap_or_else(|_| "Invalid JSON".to_string())
     );
 
-    let url = format!("{}/query", server_url);
-    log::info!("🌐 Making POST request to: {}", url);
+    let url = format!("{}/sse", server_url.trim_end_matches('/'));
+    log::info!("🌐 Making POST request to SSE endpoint: {}", url);
 
     let response = client
         .post(&url)
@@ -276,8 +276,8 @@ pub async fn send_chat_message(
         serde_json::to_string_pretty(&request_body).unwrap_or_else(|_| "Invalid JSON".to_string())
     );
 
-    let url = format!("{}/query", server_url);
-    log::info!("🌐 Making POST request to: {}", url);
+    let url = format!("{}/sse", server_url.trim_end_matches('/'));
+    log::info!("🌐 Making POST request to SSE endpoint: {}", url);
 
     // Create request options
     let opts = RequestInit::new();

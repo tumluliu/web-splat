@@ -40,25 +40,37 @@ impl MCPClient {
     }
 
     pub async fn send_message(&mut self, message: String, current_location: [f32; 3]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        log::info!("📤 Sending message via SSE: {}", message);
+        log::info!("📤 Sending message via MCP SSE: {}", message);
         
         let request_body = serde_json::json!({
             "message": message,
-            "current_location": current_location
+            "current_location": current_location,
+            "context": "3d_scene_understanding"
         });
 
-        // For native builds, use reqwest to connect to SSE endpoint
+        // For native builds, connect to MCP SSE endpoint
         let client = reqwest::Client::new();
         
+        // Use SSE endpoint directly
+        let sse_url = if self.server_url.ends_with("/sse") {
+            self.server_url.clone()
+        } else {
+            format!("{}/sse", self.server_url.trim_end_matches('/'))
+        };
+        
+        log::info!("🔌 Connecting to MCP SSE endpoint: {}", sse_url);
+        
         let response = client
-            .post(&format!("{}/query", self.server_url))
+            .post(&sse_url)
             .header("Accept", "text/event-stream")
             .header("Cache-Control", "no-cache")
+            .header("Connection", "keep-alive")
             .json(&request_body)
             .send()
             .await?;
 
-        if response.status().is_success() {
+        let status = response.status();
+        if status.is_success() {
             // Read the response as SSE stream
             let response_text = response.text().await?;
             log::info!("📥 Raw SSE response: {}", response_text);
@@ -67,42 +79,44 @@ impl MCPClient {
             let events = self.parse_sse_events(&response_text);
             log::info!("🔍 Parsed {} SSE events", events.len());
             
-            // Process the last data event
+            // Process SSE events looking for MCP data
             for event in events {
-                if let Some(data) = event.data.strip_prefix("data: ") {
-                    match crate::chat::parse_mcp_response(data) {
+                // Handle different SSE data formats
+                let data_to_parse = if event.data.starts_with("data: ") {
+                    &event.data[6..] // Remove "data: " prefix
+                } else {
+                    &event.data
+                };
+                
+                if !data_to_parse.trim().is_empty() && data_to_parse != "[DONE]" {
+                    match crate::chat::parse_mcp_response(data_to_parse) {
                         Ok(mcp_response) => {
                             self.response_cache = Some(mcp_response);
                             log::info!("✅ Successfully parsed MCP response from SSE");
                             return Ok(());
                         }
                         Err(e) => {
-                            log::warn!("⚠️ Failed to parse MCP response: {}", e);
+                            log::debug!("🔍 Couldn't parse as MCP response: {} - Data: {}", e, data_to_parse);
                         }
                     }
                 }
             }
-        }
-
-        // Fallback: try direct JSON response
-        let direct_response = client
-            .post(&format!("{}/query", self.server_url))
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await?;
-
-        if direct_response.status().is_success() {
-            let response_text = direct_response.text().await?;
-            match crate::chat::parse_mcp_response(&response_text) {
-                Ok(mcp_response) => {
-                    self.response_cache = Some(mcp_response);
-                    log::info!("✅ Successfully parsed MCP response from direct JSON");
-                }
-                Err(e) => {
-                    log::warn!("⚠️ Failed to parse direct MCP response: {}", e);
-                }
+            
+            // If no structured data found, create a text response
+            if !response_text.trim().is_empty() {
+                let text_response = crate::chat::McpResponse {
+                    answer: Vec::new(),
+                    paths: Vec::new(),
+                    scene_normal_vector: None,
+                    text_answer: Some("Received SSE response but couldn't parse as structured data".to_string()),
+                };
+                self.response_cache = Some(text_response);
+                log::info!("📝 Created text response from SSE data");
             }
+        } else {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            log::error!("❌ SSE request failed: {} - {}", status, error_text);
+            return Err(format!("SSE request failed: {} - {}", status, error_text).into());
         }
 
         Ok(())
@@ -205,30 +219,42 @@ impl MCPClient {
         use wasm_bindgen_futures::JsFuture;
         use web_sys::{Request, RequestInit, RequestMode, Response};
 
-        log::info!("📤 WASM: Sending message: {}", message);
+        log::info!("📤 WASM: Sending message via MCP SSE: {}", message);
 
         let request_body = serde_json::json!({
             "message": message,
-            "current_location": current_location
+            "current_location": current_location,
+            "context": "3d_scene_understanding"
         });
 
-        // First try SSE approach using fetch with EventSource-like behavior
-        let url = format!("{}/query", self.server_url);
-        log::info!("🌐 Making WASM request to: {}", url);
+        // Use SSE endpoint directly for MCP communication
+        let sse_url = if self.server_url.ends_with("/sse") {
+            self.server_url.clone()
+        } else {
+            format!("{}/sse", self.server_url.trim_end_matches('/'))
+        };
+        
+        log::info!("🌐 WASM: Connecting to MCP SSE endpoint: {}", sse_url);
 
         let opts = RequestInit::new();
         opts.set_method("POST");
         opts.set_mode(RequestMode::Cors);
 
-        // Set headers
+        // Set headers for SSE
         let headers = web_sys::Headers::new()
             .map_err(|e| format!("Failed to create headers: {:?}", e))?;
         headers
             .set("Content-Type", "application/json")
             .map_err(|e| format!("Failed to set content-type: {:?}", e))?;
         headers
-            .set("Accept", "text/event-stream, application/json")
+            .set("Accept", "text/event-stream")
             .map_err(|e| format!("Failed to set accept header: {:?}", e))?;
+        headers
+            .set("Cache-Control", "no-cache")
+            .map_err(|e| format!("Failed to set cache-control: {:?}", e))?;
+        headers
+            .set("Connection", "keep-alive")
+            .map_err(|e| format!("Failed to set connection: {:?}", e))?;
         opts.set_headers(&headers);
 
         // Set body
@@ -237,7 +263,7 @@ impl MCPClient {
         opts.set_body(&JsValue::from_str(&body_string));
 
         // Create request
-        let request = Request::new_with_str_and_init(&url, &opts)
+        let request = Request::new_with_str_and_init(&sse_url, &opts)
             .map_err(|e| format!("Failed to create request: {:?}", e))?;
 
         // Get window and make fetch request
@@ -266,44 +292,44 @@ impl MCPClient {
                 .as_string()
                 .ok_or("Response text is not a string")?;
 
-            log::info!("📝 WASM Raw response: {}", response_text);
+            log::info!("📝 WASM Raw SSE response: {}", response_text);
 
-            // Try to parse as MCP response directly
-            match crate::chat::parse_mcp_response(&response_text) {
-                Ok(mcp_response) => {
-                    self.response_cache = Some(mcp_response);
-                    log::info!("✅ WASM: Successfully parsed MCP response");
-                    return Ok(());
-                }
-                Err(e) => {
-                    log::warn!("⚠️ WASM: Failed to parse response as MCP: {}", e);
-                    
-                    // Try parsing as SSE events
-                    let events = self.parse_sse_events(&response_text);
-                    for event in events {
-                        if let Some(data) = event.data.strip_prefix("data: ") {
-                            match crate::chat::parse_mcp_response(data) {
-                                Ok(mcp_response) => {
-                                    self.response_cache = Some(mcp_response);
-                                    log::info!("✅ WASM: Successfully parsed MCP response from SSE");
-                                    return Ok(());
-                                }
-                                Err(e) => {
-                                    log::warn!("⚠️ WASM: Failed to parse SSE data: {}", e);
-                                }
-                            }
+            // Parse SSE events looking for MCP data
+            let events = self.parse_sse_events(&response_text);
+            log::info!("🔍 WASM: Parsed {} SSE events", events.len());
+            
+            for event in events {
+                // Handle different SSE data formats
+                let data_to_parse = if event.data.starts_with("data: ") {
+                    &event.data[6..] // Remove "data: " prefix
+                } else {
+                    &event.data
+                };
+                
+                if !data_to_parse.trim().is_empty() && data_to_parse != "[DONE]" {
+                    match crate::chat::parse_mcp_response(data_to_parse) {
+                        Ok(mcp_response) => {
+                            self.response_cache = Some(mcp_response);
+                            log::info!("✅ WASM: Successfully parsed MCP response from SSE");
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            log::debug!("🔍 WASM: Couldn't parse as MCP response: {} - Data: {}", e, data_to_parse);
                         }
                     }
-                    
-                    // Create a text-only response as fallback
-                    let text_response = McpResponse {
-                        answer: Vec::new(),
-                        paths: Vec::new(),
-                        scene_normal_vector: None,
-                        text_answer: Some(response_text),
-                    };
-                    self.response_cache = Some(text_response);
                 }
+            }
+            
+            // If no structured data found, create a text response
+            if !response_text.trim().is_empty() {
+                let text_response = crate::chat::McpResponse {
+                    answer: Vec::new(),
+                    paths: Vec::new(),
+                    scene_normal_vector: None,
+                    text_answer: Some("Received SSE response but couldn't parse as structured data".to_string()),
+                };
+                self.response_cache = Some(text_response);
+                log::info!("📝 WASM: Created text response from SSE data");
             }
         } else {
             let error_text = if let Ok(text_promise) = resp.text() {
@@ -317,16 +343,8 @@ impl MCPClient {
                 "Unknown error".to_string()
             };
 
-            log::warn!("❌ WASM Server error: {} - {}", resp.status(), error_text);
-            
-            // Create an error response
-            let error_response = McpResponse {
-                answer: Vec::new(),
-                paths: Vec::new(),
-                scene_normal_vector: None,
-                text_answer: Some(format!("Server error: {}", error_text)),
-            };
-            self.response_cache = Some(error_response);
+            log::error!("❌ WASM SSE request failed: {} - {}", resp.status(), error_text);
+            return Err(format!("SSE request failed: {} - {}", resp.status(), error_text).into());
         }
 
         Ok(())
