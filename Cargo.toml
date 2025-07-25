@@ -46,12 +46,11 @@ rand = "0.9"
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros"] }
 
-# MCP SDK for client communication (native only)
-rust-mcp-sdk = { version = "0.5.0", features = ["client", "2025_06_18"], default-features = false }
-async-trait = "0.1"
-
 [dev-dependencies]
 wasm-bindgen-cli = "0.2.92"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
 
 [lib]
 path = "src/lib.rs"
@@ -63,6 +62,9 @@ name = "viewer"
 [[bin]]
 name = "video"
 required-features = ["video"]
+
+[[example]]
+name = "test_mcp_client"
 
 [features]
 npz = ["dep:npyz"]

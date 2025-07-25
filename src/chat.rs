@@ -315,17 +315,12 @@ pub async fn send_chat_message_mcp(
         current_location[2]
     );
 
-    // Convert HTTP URL to SSE URL format
-    let sse_url = if server_url.ends_with("/sse") {
-        server_url.to_string()
-    } else {
-        format!("{}/sse", server_url.trim_end_matches('/'))
-    };
-
-    log::info!("🔄 Converting to SSE URL: {}", sse_url);
+    // Use the server URL directly (remove /sse suffix if present for our implementation)
+    let base_url = server_url.trim_end_matches("/sse").to_string();
+    log::info!("🔄 Using base URL: {}", base_url);
 
     // Create MCP client
-    let mut mcp_client = MCPClient::new(sse_url).await
+    let mut mcp_client = MCPClient::new(base_url).await
         .map_err(|e| format!("Failed to create MCP client: {}", e))?;
 
     // Start the client
@@ -356,12 +351,54 @@ pub async fn send_chat_message_mcp(
 
 #[cfg(target_arch = "wasm32")]
 pub async fn send_chat_message_mcp(
-    _message: String,
-    _server_url: &str,
-    _current_location: [f32; 3],
+    message: String,
+    server_url: &str,
+    current_location: [f32; 3],
 ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
-    // WASM version - return error indicating MCP is not supported
-    Err("MCP client is not supported in WASM builds".into())
+    use crate::mcp_client::MCPClient;
+    
+    log::info!("🔥 WASM send_chat_message_mcp called");
+    log::info!("📍 Server URL: {}", server_url);
+    log::info!("💬 Message: {}", message);
+    log::info!(
+        "📍 Current camera location: [{:.3}, {:.3}, {:.3}]",
+        current_location[0],
+        current_location[1],
+        current_location[2]
+    );
+
+    // Use the server URL directly (remove /sse suffix if present for our implementation)
+    let base_url = server_url.trim_end_matches("/sse").to_string();
+    log::info!("🔄 WASM: Using base URL: {}", base_url);
+
+    // Create MCP client
+    let mut mcp_client = MCPClient::new(base_url).await
+        .map_err(|e| format!("Failed to create WASM MCP client: {}", e))?;
+
+    // Start the client
+    mcp_client.start().await
+        .map_err(|e| format!("Failed to start WASM MCP client: {}", e))?;
+
+    // Send the message
+    mcp_client.send_message(message.clone(), current_location).await
+        .map_err(|e| format!("Failed to send WASM message: {}", e))?;
+
+    // Wait for response
+    match mcp_client.receive_response().await {
+        Some((_original_message, response)) => {
+            log::info!("✅ WASM: Successfully received MCP response");
+            Ok(response)
+        }
+        None => {
+            log::warn!("❌ WASM: No response received from MCP server");
+            Ok(McpResponse {
+                answer: Vec::new(),
+                paths: Vec::new(),
+                scene_normal_vector: None,
+                text_answer: Some("No response from MCP server (WASM)".to_string()),
+            })
+        }
+    }
 }
 
 /// Helper function to parse MCP response that handles multiple formats

@@ -1,23 +1,6 @@
-#[cfg(not(target_arch = "wasm32"))]
-use async_trait::async_trait;
-#[cfg(not(target_arch = "wasm32"))]
-use rust_mcp_sdk::error::SdkResult;
-#[cfg(not(target_arch = "wasm32"))]
-use rust_mcp_sdk::mcp_client::{client_runtime, ClientHandler, ClientRuntime};
-#[cfg(not(target_arch = "wasm32"))]
-use rust_mcp_sdk::schema::{
-    ClientCapabilities, Implementation, InitializeRequestParams, CallToolRequestParams,
-    LATEST_PROTOCOL_VERSION, CallToolResult,
-};
-#[cfg(not(target_arch = "wasm32"))]
-use rust_mcp_sdk::{ClientSseTransport, ClientSseTransportOptions, McpClient};
 use serde::{Deserialize, Serialize};
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::sync::mpsc::{self, Receiver, Sender};
 
-use crate::chat::{McpResponse, SceneObject, PathResponse};
+use crate::chat::McpResponse;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MCPRequest {
@@ -26,256 +9,397 @@ pub struct MCPRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MCPResponse {
-    pub answer: Vec<SceneObject>,
-    pub paths: Vec<PathResponse>,
-    pub scene_normal_vector: Option<String>,
-    pub text_answer: Option<String>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub struct MCPClientHandler {
-    response_sender: Sender<(String, McpResponse)>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl MCPClientHandler {
-    pub fn new(response_sender: Sender<(String, McpResponse)>) -> Self {
-        Self { response_sender }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[async_trait]
-impl ClientHandler for MCPClientHandler {
-    // This is a minimal implementation - the actual tool calls will be handled by the client runtime
+pub struct SSEEvent {
+    pub data: String,
+    #[serde(default)]
+    pub event: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub retry: Option<u32>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub struct MCPClient {
-    client: Arc<ClientRuntime>,
-    response_receiver: Receiver<(String, McpResponse)>,
-    last_tool_result: Option<CallToolResult>,
+    server_url: String,
+    response_cache: Option<McpResponse>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl MCPClient {
-    pub async fn new(server_url: String) -> SdkResult<Self> {
-        // Create channel for responses
-        let (response_sender, response_receiver) = mpsc::channel(100);
-        
-        // Create handler
-        let handler = MCPClientHandler::new(response_sender);
-
-        // Define client details and capabilities
-        let client_details = InitializeRequestParams {
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "web-splat-mcp-client".to_string(),
-                version: "0.1.0".to_string(),
-                title: Some("Web-Splat MCP Client".to_string()),
-            },
-            protocol_version: LATEST_PROTOCOL_VERSION.into(),
-        };
-
-        // Create SSE transport
-        let transport = ClientSseTransport::new(&server_url, ClientSseTransportOptions::default())?;
-
-        // Create client
-        let client = client_runtime::create_client(client_details, transport, handler);
-
+    pub async fn new(server_url: String) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Ok(Self {
-            client: Arc::clone(&client),
-            response_receiver,
-            last_tool_result: None,
+            server_url,
+            response_cache: None,
         })
     }
 
-    pub async fn start(&self) -> SdkResult<()> {
-        self.client.clone().start().await
-    }
-
-    pub async fn send_message(&mut self, message: String, current_location: [f32; 3]) -> SdkResult<()> {
-        // Create tool call with the request data
-        let params = serde_json::json!({
-            "message": message,
-            "current_location": current_location
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-
-        // Call the tool
-        let result = self.client.call_tool(CallToolRequestParams {
-            name: "scene_query".to_string(),
-            arguments: Some(params),
-        }).await?;
-
-        log::info!("🔧 MCP Tool call result: {:?}", result);
-        
-        // Store the result for later retrieval
-        self.last_tool_result = Some(result);
-        
+    pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        log::info!("🔌 Native MCP client connected to: {}", self.server_url);
         Ok(())
     }
 
-    pub async fn receive_response(&mut self) -> Option<(String, McpResponse)> {
-        // Try to get a response from the channel first
-        if let Ok((message, response)) = self.response_receiver.try_recv() {
-            return Some((message, response));
-        }
+    pub async fn send_message(&mut self, message: String, current_location: [f32; 3]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        log::info!("📤 Sending message via SSE: {}", message);
+        
+        let request_body = serde_json::json!({
+            "message": message,
+            "current_location": current_location
+        });
 
-        // Process the last tool result if available
-        if let Some(tool_result) = self.last_tool_result.take() {
-            log::info!("🔧 Processing tool result: {:?}", tool_result);
+        // For native builds, use reqwest to connect to SSE endpoint
+        let client = reqwest::Client::new();
+        
+        let response = client
+            .post(&format!("{}/query", self.server_url))
+            .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+            .json(&request_body)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            // Read the response as SSE stream
+            let response_text = response.text().await?;
+            log::info!("📥 Raw SSE response: {}", response_text);
             
-            // Extract the content from the tool result
-            if let Some(content) = tool_result.content.first() {
-                match content.as_text_content() {
-                    Ok(text_content) => {
-                        log::info!("📝 Tool response text: {}", text_content.text);
-                        
-                        // Try to parse the response as JSON
-                        match serde_json::from_str::<serde_json::Value>(&text_content.text) {
-                            Ok(json_value) => {
-                                log::info!("✅ Parsed JSON response: {:?}", json_value);
-                                
-                                // Try to parse as our McpResponse format
-                                match serde_json::from_value::<McpResponse>(json_value.clone()) {
-                                    Ok(mcp_response) => {
-                                        log::info!("✅ Successfully parsed as McpResponse");
-                                        return Some(("Riemind Response".to_string(), mcp_response));
-                                    }
-                                    Err(e) => {
-                                        log::warn!("⚠️ Failed to parse as McpResponse: {}", e);
-                                        
-                                        // Try to parse using the existing parse_mcp_response function
-                                        match crate::chat::parse_mcp_response(&text_content.text) {
-                                            Ok(mcp_response) => {
-                                                log::info!("✅ Successfully parsed using parse_mcp_response");
-                                                return Some(("Riemind Response".to_string(), mcp_response));
-                                            }
-                                            Err(e) => {
-                                                log::warn!("⚠️ Failed to parse using parse_mcp_response: {}", e);
-                                                
-                                                // Create a text-only response
-                                                let text_response = McpResponse {
-                                                    answer: Vec::new(),
-                                                    paths: Vec::new(),
-                                                    scene_normal_vector: None,
-                                                    text_answer: Some(text_content.text.clone()),
-                                                };
-                                                return Some(("Riemind Response".to_string(), text_response));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                log::warn!("⚠️ Failed to parse as JSON: {}", e);
-                                
-                                // Create a text-only response
-                                let text_response = McpResponse {
-                                    answer: Vec::new(),
-                                    paths: Vec::new(),
-                                    scene_normal_vector: None,
-                                    text_answer: Some(text_content.text.clone()),
-                                };
-                                return Some(("Riemind Response".to_string(), text_response));
-                            }
+            // Parse SSE events
+            let events = self.parse_sse_events(&response_text);
+            log::info!("🔍 Parsed {} SSE events", events.len());
+            
+            // Process the last data event
+            for event in events {
+                if let Some(data) = event.data.strip_prefix("data: ") {
+                    match crate::chat::parse_mcp_response(data) {
+                        Ok(mcp_response) => {
+                            self.response_cache = Some(mcp_response);
+                            log::info!("✅ Successfully parsed MCP response from SSE");
+                            return Ok(());
                         }
-                    }
-                    Err(e) => {
-                        log::warn!("⚠️ Failed to extract text content: {}", e);
+                        Err(e) => {
+                            log::warn!("⚠️ Failed to parse MCP response: {}", e);
+                        }
                     }
                 }
             }
         }
 
-        // Fallback to mock response if no real response is available
-        log::warn!("❌ No real response available, using mock response");
-        let mock_response = McpResponse {
-            answer: vec![
-                SceneObject {
-                    name: "Coffee Machine".to_string(),
-                    aligned_bbox: vec![
-                        [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0],
-                        [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0],
-                    ],
-                    normal_vector: Some([0.0, 0.0, 1.0]),
-                    attributes: Some(std::collections::HashMap::from([
-                        ("type".to_string(), "coffee_machine".to_string()),
-                        ("material".to_string(), "stainless_steel".to_string()),
-                    ])),
+        // Fallback: try direct JSON response
+        let direct_response = client
+            .post(&format!("{}/query", self.server_url))
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await?;
+
+        if direct_response.status().is_success() {
+            let response_text = direct_response.text().await?;
+            match crate::chat::parse_mcp_response(&response_text) {
+                Ok(mcp_response) => {
+                    self.response_cache = Some(mcp_response);
+                    log::info!("✅ Successfully parsed MCP response from direct JSON");
                 }
-            ],
-            paths: vec![
-                PathResponse {
-                    object: SceneObject {
-                        name: "Coffee Machine".to_string(),
-                        aligned_bbox: vec![
-                            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0],
-                            [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0],
-                        ],
-                        normal_vector: Some([0.0, 0.0, 1.0]),
-                        attributes: Some(std::collections::HashMap::from([
-                            ("type".to_string(), "coffee_machine".to_string()),
-                            ("material".to_string(), "stainless_steel".to_string()),
-                        ])),
-                    },
-                    path: vec![
-                        [0.0, 0.0, 0.0], // This would be the current_location from the request
-                        [0.5, 0.5, 0.5],
-                        [1.0, 1.0, 1.0],
-                    ],
+                Err(e) => {
+                    log::warn!("⚠️ Failed to parse direct MCP response: {}", e);
                 }
-            ],
-            scene_normal_vector: Some("[0.0, 1.0, 0.0]".to_string()),
-            text_answer: None,
-        };
-        
-        Some(("Mock MCP Response".to_string(), mock_response))
-    }
+            }
+        }
 
-    pub async fn shutdown(&self) -> SdkResult<()> {
-        self.client.shut_down().await
-    }
-}
-
-// WASM-compatible placeholder implementations
-#[cfg(target_arch = "wasm32")]
-pub struct MCPClientHandler;
-
-#[cfg(target_arch = "wasm32")]
-impl MCPClientHandler {
-    pub fn new(_response_sender: ()) -> Self {
-        Self
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-pub struct MCPClient;
-
-#[cfg(target_arch = "wasm32")]
-impl MCPClient {
-    pub async fn new(_server_url: String) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(Self)
-    }
-
-    pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Ok(())
-    }
-
-    pub async fn send_message(&self, _message: String, _current_location: [f32; 3]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
 
     pub async fn receive_response(&mut self) -> Option<(String, McpResponse)> {
-        None
+        if let Some(response) = self.response_cache.take() {
+            Some(("SSE Response".to_string(), response))
+        } else {
+            None
+        }
     }
 
     pub async fn shutdown(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        log::info!("🔌 Native MCP client shutting down");
         Ok(())
+    }
+
+    fn parse_sse_events(&self, text: &str) -> Vec<SSEEvent> {
+        let mut events = Vec::new();
+        let mut current_event = SSEEvent {
+            data: String::new(),
+            event: None,
+            id: None,
+            retry: None,
+        };
+        
+        for line in text.lines() {
+            let line = line.trim();
+            
+            if line.is_empty() {
+                // Empty line marks end of event
+                if !current_event.data.is_empty() || current_event.event.is_some() {
+                    events.push(current_event.clone());
+                }
+                current_event = SSEEvent {
+                    data: String::new(),
+                    event: None,
+                    id: None,
+                    retry: None,
+                };
+                continue;
+            }
+            
+            if let Some(colon_pos) = line.find(':') {
+                let field = &line[..colon_pos].trim();
+                let value = line[colon_pos + 1..].trim();
+                
+                match *field {
+                    "data" => {
+                        if !current_event.data.is_empty() {
+                            current_event.data.push('\n');
+                        }
+                        current_event.data.push_str(value);
+                    }
+                    "event" => current_event.event = Some(value.to_string()),
+                    "id" => current_event.id = Some(value.to_string()),
+                    "retry" => {
+                        if let Ok(retry_val) = value.parse::<u32>() {
+                            current_event.retry = Some(retry_val);
+                        }
+                    }
+                    _ => {} // Ignore unknown fields
+                }
+            }
+        }
+        
+        // Don't forget the last event if there's no trailing empty line
+        if !current_event.data.is_empty() || current_event.event.is_some() {
+            events.push(current_event);
+        }
+        
+        events
+    }
+}
+
+// WASM implementation using browser's EventSource API
+#[cfg(target_arch = "wasm32")]
+pub struct MCPClient {
+    server_url: String,
+    response_cache: Option<McpResponse>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl MCPClient {
+    pub async fn new(server_url: String) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(Self {
+            server_url,
+            response_cache: None,
+        })
+    }
+
+    pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        log::info!("🌐 WASM MCP client initialized for: {}", self.server_url);
+        Ok(())
+    }
+
+    pub async fn send_message(&mut self, message: String, current_location: [f32; 3]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use wasm_bindgen::prelude::*;
+        use wasm_bindgen_futures::JsFuture;
+        use web_sys::{Request, RequestInit, RequestMode, Response};
+
+        log::info!("📤 WASM: Sending message: {}", message);
+
+        let request_body = serde_json::json!({
+            "message": message,
+            "current_location": current_location
+        });
+
+        // First try SSE approach using fetch with EventSource-like behavior
+        let url = format!("{}/query", self.server_url);
+        log::info!("🌐 Making WASM request to: {}", url);
+
+        let opts = RequestInit::new();
+        opts.set_method("POST");
+        opts.set_mode(RequestMode::Cors);
+
+        // Set headers
+        let headers = web_sys::Headers::new()
+            .map_err(|e| format!("Failed to create headers: {:?}", e))?;
+        headers
+            .set("Content-Type", "application/json")
+            .map_err(|e| format!("Failed to set content-type: {:?}", e))?;
+        headers
+            .set("Accept", "text/event-stream, application/json")
+            .map_err(|e| format!("Failed to set accept header: {:?}", e))?;
+        opts.set_headers(&headers);
+
+        // Set body
+        let body_string = serde_json::to_string(&request_body)
+            .map_err(|e| format!("Failed to serialize request: {}", e))?;
+        opts.set_body(&JsValue::from_str(&body_string));
+
+        // Create request
+        let request = Request::new_with_str_and_init(&url, &opts)
+            .map_err(|e| format!("Failed to create request: {:?}", e))?;
+
+        // Get window and make fetch request
+        let window = web_sys::window().ok_or("No global window object")?;
+        let resp_value = JsFuture::from(window.fetch_with_request(&request))
+            .await
+            .map_err(|e| format!("Fetch failed: {:?}", e))?;
+
+        // Cast to Response
+        let resp: Response = resp_value
+            .dyn_into()
+            .map_err(|_| "Response is not a Response object")?;
+
+        log::info!("📡 WASM Response status: {}", resp.status());
+
+        if resp.ok() {
+            // Get response text
+            let text_promise = resp
+                .text()
+                .map_err(|e| format!("Failed to get response text promise: {:?}", e))?;
+            let text_value = JsFuture::from(text_promise)
+                .await
+                .map_err(|e| format!("Failed to get response text: {:?}", e))?;
+
+            let response_text = text_value
+                .as_string()
+                .ok_or("Response text is not a string")?;
+
+            log::info!("📝 WASM Raw response: {}", response_text);
+
+            // Try to parse as MCP response directly
+            match crate::chat::parse_mcp_response(&response_text) {
+                Ok(mcp_response) => {
+                    self.response_cache = Some(mcp_response);
+                    log::info!("✅ WASM: Successfully parsed MCP response");
+                    return Ok(());
+                }
+                Err(e) => {
+                    log::warn!("⚠️ WASM: Failed to parse response as MCP: {}", e);
+                    
+                    // Try parsing as SSE events
+                    let events = self.parse_sse_events(&response_text);
+                    for event in events {
+                        if let Some(data) = event.data.strip_prefix("data: ") {
+                            match crate::chat::parse_mcp_response(data) {
+                                Ok(mcp_response) => {
+                                    self.response_cache = Some(mcp_response);
+                                    log::info!("✅ WASM: Successfully parsed MCP response from SSE");
+                                    return Ok(());
+                                }
+                                Err(e) => {
+                                    log::warn!("⚠️ WASM: Failed to parse SSE data: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Create a text-only response as fallback
+                    let text_response = McpResponse {
+                        answer: Vec::new(),
+                        paths: Vec::new(),
+                        scene_normal_vector: None,
+                        text_answer: Some(response_text),
+                    };
+                    self.response_cache = Some(text_response);
+                }
+            }
+        } else {
+            let error_text = if let Ok(text_promise) = resp.text() {
+                match JsFuture::from(text_promise).await {
+                    Ok(text_value) => text_value
+                        .as_string()
+                        .unwrap_or_else(|| "Unknown error".to_string()),
+                    Err(_) => "Failed to read error text".to_string(),
+                }
+            } else {
+                "Unknown error".to_string()
+            };
+
+            log::warn!("❌ WASM Server error: {} - {}", resp.status(), error_text);
+            
+            // Create an error response
+            let error_response = McpResponse {
+                answer: Vec::new(),
+                paths: Vec::new(),
+                scene_normal_vector: None,
+                text_answer: Some(format!("Server error: {}", error_text)),
+            };
+            self.response_cache = Some(error_response);
+        }
+
+        Ok(())
+    }
+
+    pub async fn receive_response(&mut self) -> Option<(String, McpResponse)> {
+        if let Some(response) = self.response_cache.take() {
+            Some(("WASM SSE Response".to_string(), response))
+        } else {
+            None
+        }
+    }
+
+    pub async fn shutdown(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        log::info!("🌐 WASM MCP client shutting down");
+        Ok(())
+    }
+
+    fn parse_sse_events(&self, text: &str) -> Vec<SSEEvent> {
+        let mut events = Vec::new();
+        let mut current_event = SSEEvent {
+            data: String::new(),
+            event: None,
+            id: None,
+            retry: None,
+        };
+        
+        for line in text.lines() {
+            let line = line.trim();
+            
+            if line.is_empty() {
+                // Empty line marks end of event
+                if !current_event.data.is_empty() || current_event.event.is_some() {
+                    events.push(current_event.clone());
+                }
+                current_event = SSEEvent {
+                    data: String::new(),
+                    event: None,
+                    id: None,
+                    retry: None,
+                };
+                continue;
+            }
+            
+            if let Some(colon_pos) = line.find(':') {
+                let field = &line[..colon_pos].trim();
+                let value = line[colon_pos + 1..].trim();
+                
+                match *field {
+                    "data" => {
+                        if !current_event.data.is_empty() {
+                            current_event.data.push('\n');
+                        }
+                        current_event.data.push_str(value);
+                    }
+                    "event" => current_event.event = Some(value.to_string()),
+                    "id" => current_event.id = Some(value.to_string()),
+                    "retry" => {
+                        if let Ok(retry_val) = value.parse::<u32>() {
+                            current_event.retry = Some(retry_val);
+                        }
+                    }
+                    _ => {} // Ignore unknown fields
+                }
+            }
+        }
+        
+        // Don't forget the last event if there's no trailing empty line
+        if !current_event.data.is_empty() || current_event.event.is_some() {
+            events.push(current_event);
+        }
+        
+        events
     }
 }
 
@@ -285,63 +409,34 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
-    async fn test_mcp_client_creation() {
-        // This test verifies that we can create an MCP client
-        // Note: This will fail if no MCP server is running, but that's expected
-        let result = MCPClient::new("http://localhost:8080/sse".to_string()).await;
-        match result {
-            Ok(_client) => {
-                println!("✅ MCP client created successfully");
-            }
-            Err(e) => {
-                println!("⚠️  MCP client creation failed (expected if no server running): {}", e);
-            }
-        }
+    async fn test_native_mcp_client_creation() {
+        let result = MCPClient::new("http://localhost:8080".to_string()).await;
+        assert!(result.is_ok());
+        println!("✅ Native MCP client created successfully");
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[tokio::test]
-    async fn test_mcp_client_with_riemind() {
-        // Test with the actual Riemind server
-        let result = MCPClient::new("http://localhost:8080/sse".to_string()).await;
-        match result {
-            Ok(mut client) => {
-                println!("✅ MCP client created successfully");
-                
-                // Try to start the client
-                match client.start().await {
-                    Ok(_) => {
-                        println!("✅ MCP client started successfully");
-                        
-                        // Try to send a test message
-                        match client.send_message("where is the coffee machine?".to_string(), [0.0, 1.0, 0.0]).await {
-                            Ok(_) => {
-                                println!("✅ Message sent successfully");
-                                
-                                // Try to receive a response
-                                match client.receive_response().await {
-                                    Some((message, response)) => {
-                                        println!("✅ Received response: {}", message);
-                                        println!("Response: {:?}", response);
-                                    }
-                                    None => {
-                                        println!("⚠️  No response received");
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                println!("⚠️  Failed to send message: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        println!("⚠️  Failed to start MCP client: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                println!("⚠️  MCP client creation failed: {}", e);
-            }
-        }
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    async fn test_wasm_mcp_client_creation() {
+        let result = MCPClient::new("http://localhost:8080".to_string()).await;
+        assert!(result.is_ok());
+        web_sys::console::log_1(&"✅ WASM MCP client created successfully".into());
+    }
+
+    #[test]
+    fn test_sse_event_parsing() {
+        let client = MCPClient {
+            server_url: "test".to_string(),
+            response_cache: None,
+        };
+
+        let sse_text = "data: test message\nevent: message\nid: 123\n\ndata: second message\n\n";
+        let events = client.parse_sse_events(sse_text);
+        
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].data, "test message");
+        assert_eq!(events[0].event, Some("message".to_string()));
+        assert_eq!(events[0].id, Some("123".to_string()));
+        assert_eq!(events[1].data, "second message");
     }
 } 

@@ -171,8 +171,8 @@ pub use pointcloud::PointCloud;
 mod chat;
 pub use chat::{ChatState, McpResponse, SceneObject, ScenePath};
 
-mod mcp_client;
-pub use mcp_client::{MCPClient, MCPClientHandler};
+pub mod mcp_client;
+pub use mcp_client::MCPClient;
 
 pub mod io;
 
