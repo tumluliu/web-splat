@@ -24,7 +24,7 @@ print(f"📡 Will forward requests to: {REAL_MCP_SERVER_URL}")
 print(f"🌐 Proxy will be available at: http://localhost:8080")
 
 
-@app.route("/sse", methods=["POST", "OPTIONS"])
+@app.route("/sse", methods=["GET", "POST", "OPTIONS"])
 def proxy_sse():
     """Proxy the /sse endpoint to the real MCP server"""
 
@@ -32,7 +32,7 @@ def proxy_sse():
         # Handle preflight request
         response = Response()
         response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Accept, Cache-Control, Connection"
         return response
 
@@ -40,23 +40,46 @@ def proxy_sse():
         # Forward the request to the real MCP server
         real_url = f"{REAL_MCP_SERVER_URL}/sse"
 
-        print(f"🔄 Forwarding SSE request to: {real_url}")
-        print(f"📦 Request data: {request.get_json()}")
+        if request.method == "GET":
+            # Standard SSE protocol - forward query parameters
+            print(f"🔄 Forwarding SSE GET request to: {real_url}")
+            print(f"📦 Query params: {request.args}")
+            
+            # Forward query parameters
+            if request.args:
+                query_string = "&".join([f"{k}={v}" for k, v in request.args.items()])
+                real_url += f"?{query_string}"
+            
+            headers = {
+                "Accept": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive"
+            }
 
-        # Forward with SSE headers
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive"
-        }
+            response = requests.get(
+                real_url,
+                headers=headers,
+                timeout=30,
+            )
+        else:
+            # Legacy POST support
+            print(f"🔄 Forwarding SSE POST request to: {real_url}")
+            print(f"📦 Request data: {request.get_json()}")
 
-        response = requests.post(
-            real_url,
-            json=request.get_json(),
-            headers=headers,
-            timeout=30,
-        )
+            # Forward with SSE headers
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive"
+            }
+
+            response = requests.post(
+                real_url,
+                json=request.get_json(),
+                headers=headers,
+                timeout=30,
+            )
 
         print(f"📡 Response status: {response.status_code}")
         print(f"📝 Response data: {response.text}")
@@ -68,7 +91,7 @@ def proxy_sse():
             headers={
                 "Content-Type": response.headers.get("Content-Type", "text/event-stream"),
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type, Accept, Cache-Control, Connection",
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -143,16 +166,18 @@ if __name__ == "__main__":
         print(f"📡 Using MCP server URL from command line: {REAL_MCP_SERVER_URL}")
 
     print("=" * 80)
-    print("🚀 CORS PROXY STARTING (SSE MODE)")
+    print("🚀 CORS PROXY STARTING (PROPER SSE MODE)")
     print(f"📡 Real MCP Server: {REAL_MCP_SERVER_URL}")
     print("🌐 Proxy Server: http://localhost:8080")
     print("💡 Usage:")
     print("   1. Start this proxy: python cors_proxy.py [real-server-url]")
     print("   2. Configure web app to use: http://localhost:8080")
-    print("   3. SSE requests to /sse will be forwarded to the real server")
-    print("   4. Legacy /query requests will redirect to /sse")
+    print("   3. GET /sse requests will be forwarded (standard SSE)")
+    print("   4. POST /sse requests still supported (legacy)")
+    print("   5. /query requests redirect to /sse")
     print("🔗 Forwarding:")
-    print(f"   • /sse → {REAL_MCP_SERVER_URL}/sse")
+    print(f"   • GET /sse → {REAL_MCP_SERVER_URL}/sse?params (standard SSE)")
+    print(f"   • POST /sse → {REAL_MCP_SERVER_URL}/sse (legacy)")
     print(f"   • /query → {REAL_MCP_SERVER_URL}/sse (redirected)")
     print("=" * 80)
 

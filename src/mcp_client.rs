@@ -40,31 +40,35 @@ impl MCPClient {
     }
 
     pub async fn send_message(&mut self, message: String, current_location: [f32; 3]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        log::info!("📤 Sending message via MCP SSE: {}", message);
+        log::info!("📤 Sending message via proper SSE: {}", message);
         
-        let request_body = serde_json::json!({
-            "messages": message,
-            "current_location": current_location
-        });
-
         let client = reqwest::Client::new();
         
-        // Use SSE endpoint (server is at /sse)
+        // Use SSE endpoint with query parameters (standard SSE)
         let sse_url = if self.server_url.ends_with("/sse") {
             self.server_url.clone()
         } else {
             format!("{}/sse", self.server_url.trim_end_matches('/'))
         };
         
-        log::info!("🔌 Connecting to MCP SSE endpoint: {}", sse_url);
+        // Encode parameters in URL for GET request (standard SSE)
+        let encoded_message = message.replace(" ", "%20").replace("?", "%3F").replace("&", "%26");
+        let url_with_params = format!(
+            "{}?messages={}&current_location={},{},{}",
+            sse_url,
+            encoded_message,
+            current_location[0],
+            current_location[1],
+            current_location[2]
+        );
+        
+        log::info!("🔌 Connecting to SSE endpoint (GET): {}", url_with_params);
         
         let response = client
-            .post(&sse_url)
+            .get(&url_with_params)  // Use GET instead of POST
             .header("Accept", "text/event-stream")
             .header("Cache-Control", "no-cache") 
             .header("Connection", "keep-alive")
-            .header("Content-Type", "application/json")
-            .json(&request_body)
             .send()
             .await?;
 
@@ -218,32 +222,35 @@ impl MCPClient {
         use wasm_bindgen_futures::JsFuture;
         use web_sys::{Request, RequestInit, RequestMode, Response};
 
-        log::info!("📤 WASM: Sending message via MCP: {}", message);
+        log::info!("📤 WASM: Sending message via proper SSE: {}", message);
 
-        let request_body = serde_json::json!({
-            "messages": message,
-            "current_location": current_location
-        });
-
-        // Use SSE endpoint (server is at /sse)
+        // Use SSE endpoint with query parameters (standard SSE)
         let sse_url = if self.server_url.ends_with("/sse") {
             self.server_url.clone()
         } else {
             format!("{}/sse", self.server_url.trim_end_matches('/'))
         };
         
-        log::info!("🌐 WASM: Connecting to MCP SSE endpoint: {}", sse_url);
+        // Encode parameters in URL for GET request (standard SSE)
+        let encoded_message = message.replace(" ", "%20").replace("?", "%3F").replace("&", "%26");
+        let url_with_params = format!(
+            "{}?messages={}&current_location={},{},{}",
+            sse_url,
+            encoded_message,
+            current_location[0],
+            current_location[1],
+            current_location[2]
+        );
+        
+        log::info!("🌐 WASM: Connecting to SSE endpoint (GET): {}", url_with_params);
 
         let opts = RequestInit::new();
-        opts.set_method("POST");
+        opts.set_method("GET");  // Use GET instead of POST
         opts.set_mode(RequestMode::Cors);
 
         // Set headers for SSE
         let headers = web_sys::Headers::new()
             .map_err(|e| format!("Failed to create headers: {:?}", e))?;
-        headers
-            .set("Content-Type", "application/json")
-            .map_err(|e| format!("Failed to set content-type: {:?}", e))?;
         headers
             .set("Accept", "text/event-stream")
             .map_err(|e| format!("Failed to set accept header: {:?}", e))?;
@@ -255,13 +262,10 @@ impl MCPClient {
             .map_err(|e| format!("Failed to set connection: {:?}", e))?;
         opts.set_headers(&headers);
 
-        // Set body
-        let body_string = serde_json::to_string(&request_body)
-            .map_err(|e| format!("Failed to serialize request: {}", e))?;
-        opts.set_body(&JsValue::from_str(&body_string));
+        // No body needed for GET request
 
         // Create request
-        let request = Request::new_with_str_and_init(&sse_url, &opts)
+        let request = Request::new_with_str_and_init(&url_with_params, &opts)
             .map_err(|e| format!("Failed to create request: {:?}", e))?;
 
         // Get window and make fetch request

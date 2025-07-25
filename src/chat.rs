@@ -198,23 +198,27 @@ pub async fn send_chat_message(
 
     let client = reqwest::Client::new();
 
-    let request_body = serde_json::json!({
-        "messages": message,
-        "current_location": current_location
-    });
-
-    log::info!(
-        "📦 Request body: {}",
-        serde_json::to_string_pretty(&request_body).unwrap_or_else(|_| "Invalid JSON".to_string())
+    // Use proper SSE protocol with GET and query parameters
+    let sse_url = format!("{}/sse", server_url.trim_end_matches('/'));
+    
+    // Encode parameters in URL for GET request (standard SSE)
+    let encoded_message = message.replace(" ", "%20").replace("?", "%3F").replace("&", "%26");
+    let url_with_params = format!(
+        "{}?messages={}&current_location={},{},{}",
+        sse_url,
+        encoded_message,
+        current_location[0],
+        current_location[1],
+        current_location[2]
     );
 
-    let url = format!("{}/sse", server_url.trim_end_matches('/'));
-    log::info!("🌐 Making POST request to SSE endpoint: {}", url);
+    log::info!("🌐 Making GET request to SSE endpoint: {}", url_with_params);
 
     let response = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&request_body)
+        .get(&url_with_params)
+        .header("Accept", "text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .header("Connection", "keep-alive")
         .send()
         .await?;
 
@@ -264,39 +268,45 @@ pub async fn send_chat_message(
         current_location[2]
     );
 
-    let request_body = serde_json::json!({
-        "messages": message,
-        "current_location": current_location
-    });
-
-    log::info!(
-        "📦 Request body: {}",
-        serde_json::to_string_pretty(&request_body).unwrap_or_else(|_| "Invalid JSON".to_string())
+    // Use proper SSE protocol with GET and query parameters
+    let sse_url = format!("{}/sse", server_url.trim_end_matches('/'));
+    
+    // Encode parameters in URL for GET request (standard SSE)
+    let encoded_message = message.replace(" ", "%20").replace("?", "%3F").replace("&", "%26");
+    let url_with_params = format!(
+        "{}?messages={}&current_location={},{},{}",
+        sse_url,
+        encoded_message,
+        current_location[0],
+        current_location[1],
+        current_location[2]
     );
 
-    let url = format!("{}/sse", server_url.trim_end_matches('/'));
-    log::info!("🌐 Making POST request to SSE endpoint: {}", url);
+    log::info!("🌐 WASM: Making GET request to SSE endpoint: {}", url_with_params);
 
     // Create request options
     let opts = RequestInit::new();
-    opts.set_method("POST");
+    opts.set_method("GET");  // Use GET instead of POST
     opts.set_mode(RequestMode::Cors);
 
-    // Set headers
+    // Set headers for SSE
     let headers =
         web_sys::Headers::new().map_err(|e| format!("Failed to create headers: {:?}", e))?;
     headers
-        .set("Content-Type", "application/json")
-        .map_err(|e| format!("Failed to set content-type: {:?}", e))?;
+        .set("Accept", "text/event-stream")
+        .map_err(|e| format!("Failed to set accept header: {:?}", e))?;
+    headers
+        .set("Cache-Control", "no-cache")
+        .map_err(|e| format!("Failed to set cache-control: {:?}", e))?;
+    headers
+        .set("Connection", "keep-alive")
+        .map_err(|e| format!("Failed to set connection: {:?}", e))?;
     opts.set_headers(&headers);
 
-    // Set body
-    let body_string = serde_json::to_string(&request_body)
-        .map_err(|e| format!("Failed to serialize request: {}", e))?;
-    opts.set_body(&JsValue::from_str(&body_string));
+    // No body needed for GET request
 
     // Create request
-    let request = Request::new_with_str_and_init(&url, &opts)
+    let request = Request::new_with_str_and_init(&url_with_params, &opts)
         .map_err(|e| format!("Failed to create request: {:?}", e))?;
 
     // Get window and make fetch request
