@@ -5,6 +5,8 @@ use std::collections::VecDeque;
 use std::time::SystemTime;
 #[cfg(target_arch = "wasm32")]
 use web_time::SystemTime;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
@@ -177,6 +179,41 @@ impl ChatState {
             MCPConnectionStatus::Connected => "🟢 Connected".to_string(),
             MCPConnectionStatus::Error(err) => format!("🔴 Error: {}", err),
         }
+    }
+
+    /// Initiate a persistent connection to the MCP server
+    pub async fn connect_to_server(&mut self, server_url: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        log::info!("🔌 Initiating connection to MCP server: {}", server_url);
+        
+        self.mark_connection_attempt();
+        
+        // For now, we'll establish connection on first message
+        // In a full implementation, this would open a persistent SSE connection
+        // and start listening for server-sent events
+        
+        // Simulate connection test
+        match test_server_connection(server_url).await {
+            Ok(_) => {
+                self.set_connection_status(MCPConnectionStatus::Connected);
+                log::info!("✅ Successfully connected to MCP server");
+                Ok(())
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to connect: {}", e);
+                self.set_connection_status(MCPConnectionStatus::Error(error_msg.clone()));
+                log::error!("❌ Connection failed: {}", error_msg);
+                Err(e)
+            }
+        }
+    }
+
+    /// Disconnect from the MCP server
+    pub fn disconnect_from_server(&mut self) {
+        log::info!("🔌 Disconnecting from MCP server");
+        self.set_connection_status(MCPConnectionStatus::Disconnected);
+        
+        // In a full implementation, this would close the persistent SSE connection
+        // and stop listening for events
     }
 }
 
@@ -394,9 +431,13 @@ pub async fn send_chat_message_mcp(
     mcp_client.start().await
         .map_err(|e| format!("Failed to start MCP client: {}", e))?;
 
-    // Send the message
-    mcp_client.send_message(message.clone(), current_location).await
-        .map_err(|e| format!("Failed to send message: {}", e))?;
+    // Use the new call_tool() function for more MCP-protocol-like behavior
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("query".to_string(), serde_json::json!(message.clone()));
+    arguments.insert("context".to_string(), serde_json::json!("3d_scene_understanding"));
+    
+    mcp_client.call_tool("scene_query", arguments, current_location).await
+        .map_err(|e| format!("Failed to call tool: {}", e))?;
 
     // Wait for response
     match mcp_client.receive_response().await {
@@ -446,9 +487,13 @@ pub async fn send_chat_message_mcp(
     mcp_client.start().await
         .map_err(|e| format!("Failed to start WASM MCP client: {}", e))?;
 
-    // Send the message
-    mcp_client.send_message(message.clone(), current_location).await
-        .map_err(|e| format!("Failed to send WASM message: {}", e))?;
+    // Use the new call_tool() function for more MCP-protocol-like behavior
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("query".to_string(), serde_json::json!(message.clone()));
+    arguments.insert("context".to_string(), serde_json::json!("3d_scene_understanding"));
+    
+    mcp_client.call_tool("scene_query", arguments, current_location).await
+        .map_err(|e| format!("Failed to call tool: {}", e))?;
 
     // Wait for response
     match mcp_client.receive_response().await {
@@ -670,6 +715,62 @@ pub fn parse_mcp_response(
         scene_normal_vector: raw_response.scene_normal_vector,
         text_answer,
     })
+}
+
+/// Test connection to MCP server
+pub async fn test_server_connection(server_url: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let client = reqwest::Client::new();
+        let test_url = format!("{}/health", server_url.trim_end_matches('/'));
+        
+        log::info!("🔍 Testing connection to: {}", test_url);
+        
+        let response = client
+            .get(&test_url)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await?;
+            
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!("Server returned status: {}", response.status()).into())
+        }
+    }
+    
+    #[cfg(target_arch = "wasm32")]
+    {
+        // For WASM, we'll just simulate a connection test
+        // In a real implementation, you'd make a fetch request here
+        use wasm_bindgen_futures::JsFuture;
+        use web_sys::{Request, RequestInit, RequestMode};
+        
+        let test_url = format!("{}/health", server_url.trim_end_matches('/'));
+        log::info!("🔍 WASM: Testing connection to: {}", test_url);
+        
+        let opts = RequestInit::new();
+        opts.set_method("GET");
+        opts.set_mode(RequestMode::Cors);
+        
+        let request = Request::new_with_str_and_init(&test_url, &opts)
+            .map_err(|e| format!("Failed to create request: {:?}", e))?;
+            
+        let window = web_sys::window().ok_or("No global window object")?;
+        let resp_value = JsFuture::from(window.fetch_with_request(&request))
+            .await
+            .map_err(|e| format!("Fetch failed: {:?}", e))?;
+            
+        let resp: web_sys::Response = resp_value
+            .dyn_into()
+            .map_err(|_| "Response is not a Response object")?;
+            
+        if resp.ok() {
+            Ok(())
+        } else {
+            Err(format!("Server returned status: {}", resp.status()).into())
+        }
+    }
 }
 
 /// Parse scene normal vector from string format "[x,y,z]"

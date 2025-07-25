@@ -665,7 +665,7 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
         });
 
     // Chat UI - handle separately to avoid borrowing conflicts
-    let (chat_message, new_input, clear_highlights, new_server_url, new_font_size, new_use_mcp_client) = chat_ui(state, ctx);
+    let (chat_message, new_input, clear_highlights, new_server_url, new_font_size, new_use_mcp_client, connect_requested, disconnect_requested) = chat_ui(state, ctx);
 
     // Update chat input state
     state.chat_state.current_input = new_input;
@@ -707,6 +707,50 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
                 }
             }
         }
+    }
+
+    // Handle connection requests
+    if connect_requested && state.chat_state.use_mcp_client {
+        log::info!("🔌 Manual connection requested");
+        let server_url = state.chat_state.mcp_server_url.clone();
+        
+        // Add system message about connection attempt
+        state.chat_state.add_message("🔌 Connecting to MCP server...".to_string(), false);
+        
+        // Spawn async task to connect
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // For native builds, use async runtime
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            std::thread::spawn(move || {
+                // This is a basic connection test - in a full implementation,
+                // you'd establish a persistent SSE connection here
+                match rt.block_on(crate::chat::test_server_connection(&server_url)) {
+                    Ok(_) => {
+                        log::info!("✅ Connection test successful");
+                        // In a real implementation, the connection status would be updated
+                        // by the actual SSE connection establishment
+                    }
+                    Err(e) => {
+                        log::error!("❌ Connection test failed: {}", e);
+                        // The error will be handled when the next message is sent
+                    }
+                }
+            });
+        }
+        
+        #[cfg(target_arch = "wasm32")]
+        {
+            // For WASM builds, we'll test connection on next message
+            // In a full implementation, you'd use the browser's EventSource API here
+            log::info!("🌐 WASM: Connection will be tested on next message");
+        }
+    }
+
+    if disconnect_requested {
+        log::info!("🔌 Manual disconnection requested");
+        state.chat_state.disconnect_from_server();
+        state.chat_state.add_message("🔌 Disconnected from MCP server".to_string(), false);
     }
 
     // Handle clear highlights
@@ -820,13 +864,15 @@ fn optional_checkbox(ui: &mut egui::Ui, opt: &mut Option<bool>, default: bool) {
 pub fn chat_ui(
     state: &WindowContext,
     ctx: &egui::Context,
-) -> (Option<String>, String, bool, String, f32, bool) {
+) -> (Option<String>, String, bool, String, f32, bool, bool, bool) {
     let mut message_to_send = None;
     let mut current_input = state.chat_state.current_input.clone();
     let mut clear_highlights = false;
     let mut server_url = state.chat_state.mcp_server_url.clone();
     let mut font_size = state.chat_state.font_size;
     let mut use_mcp_client = state.chat_state.use_mcp_client;
+    let mut connect_requested = false;
+    let mut disconnect_requested = false;
 
     egui::Window::new("💬 3D Scene Chat")
         .default_width(450.)
@@ -961,6 +1007,38 @@ pub fn chat_ui(
                 ui.colored_label(status_color, status_text);
             });
 
+            // Connection control buttons (only show if MCP client is enabled)
+            if use_mcp_client {
+                ui.horizontal(|ui| {
+                    let can_connect = matches!(
+                        state.chat_state.mcp_connection_status,
+                        crate::chat::MCPConnectionStatus::Disconnected | crate::chat::MCPConnectionStatus::Error(_)
+                    );
+                    
+                    let can_disconnect = matches!(
+                        state.chat_state.mcp_connection_status,
+                        crate::chat::MCPConnectionStatus::Connected | crate::chat::MCPConnectionStatus::Connecting
+                    );
+
+                    if ui.add_enabled(can_connect, egui::Button::new("🔌 Connect")).clicked() {
+                        connect_requested = true;
+                    }
+                    
+                    if ui.add_enabled(can_disconnect, egui::Button::new("🔌 Disconnect")).clicked() {
+                        disconnect_requested = true;
+                    }
+
+                    // Show retry button for errors
+                    if let crate::chat::MCPConnectionStatus::Error(_) = state.chat_state.mcp_connection_status {
+                        if state.chat_state.can_retry_connection() {
+                            if ui.button("🔄 Retry").clicked() {
+                                connect_requested = true;
+                            }
+                        }
+                    }
+                });
+            }
+
             // Server settings
             ui.collapsing("Settings", |ui| {
                 ui.horizontal(|ui| {
@@ -1003,7 +1081,7 @@ pub fn chat_ui(
             });
         });
 
-    (message_to_send, current_input, clear_highlights, server_url, font_size, use_mcp_client)
+    (message_to_send, current_input, clear_highlights, server_url, font_size, use_mcp_client, connect_requested, disconnect_requested)
 }
 
 /// Create mock response for testing - replace with real async handling
