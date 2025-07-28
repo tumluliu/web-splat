@@ -70,6 +70,9 @@ name = "test_mcp_client"
 [[example]]
 name = "test_enhanced_chat"
 
+[[example]]
+name = "demo_request_format"
+
 [features]
 npz = ["dep:npyz"]
 video = []

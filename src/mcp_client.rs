@@ -48,29 +48,29 @@ impl MCPClient {
         
         let client = reqwest::Client::new();
         
-        // Use proper MCP tool call endpoint
-        let tool_url = format!("{}/tools/call", self.server_url.trim_end_matches('/'));
+        // Use the correct SSE endpoint that your server expects
+        let sse_url = format!("{}/sse", self.server_url.trim_end_matches('/'));
         
-        // Create MCP-compliant tool call request
-        let tool_request = json!({
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "params": {
-                "name": tool_name,
-                "arguments": arguments,
-                "current_location": current_location
-            },
-            "id": 1
+        // Extract the message from arguments (this is what your server expects)
+        let message = arguments.get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("scene query")
+            .to_string();
+        
+        // Create the CORRECT format that your MCP server expects
+        let mcp_request = json!({
+            "messages": message,
+            "current_location": current_location
         });
         
-        log::info!("🔧 Sending MCP tool call to: {}", tool_url);
-        log::info!("📋 Tool request: {}", serde_json::to_string_pretty(&tool_request).unwrap_or_default());
+        log::info!("🔧 Sending MCP request to: {}", sse_url);
+        log::info!("📋 Request body: {}", serde_json::to_string_pretty(&mcp_request).unwrap_or_default());
         
         let response = client
-            .post(&tool_url)
+            .post(&sse_url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .json(&tool_request)
+            .json(&mcp_request)
             .send()
             .await?;
         
@@ -79,16 +79,16 @@ impl MCPClient {
         let status = response.status();
         if status.is_success() {
             let response_text = response.text().await?;
-            log::info!("📥 Raw tool response: {}", response_text);
+            log::info!("📥 Raw MCP response: {}", response_text);
             
-            // Parse the tool response into our McpResponse format
+            // Parse the response into our McpResponse format
             match self.parse_tool_response(&response_text) {
                 Ok(mcp_response) => {
                     self.response_cache = Some(mcp_response);
-                    log::info!("✅ Successfully parsed MCP tool response");
+                    log::info!("✅ Successfully parsed MCP response");
                 }
                 Err(e) => {
-                    log::warn!("⚠️ Failed to parse tool response: {}", e);
+                    log::warn!("⚠️ Failed to parse MCP response: {}", e);
                     // Create a text response as fallback
                     let text_response = McpResponse {
                         answer: Vec::new(),
@@ -101,8 +101,8 @@ impl MCPClient {
             }
         } else {
             let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            log::error!("❌ MCP tool call failed: {} - {}", status, error_text);
-            return Err(format!("MCP tool call failed: {} - {}", status, error_text).into());
+            log::error!("❌ MCP request failed: {} - {}", status, error_text);
+            return Err(format!("MCP request failed: {} - {}", status, error_text).into());
         }
 
         Ok(())
