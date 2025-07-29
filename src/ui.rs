@@ -20,7 +20,7 @@ use egui::{emath::Numeric, Color32, RichText};
 #[cfg(not(target_arch = "wasm32"))]
 use egui_plot::{Legend, PlotPoints};
 
-pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
+pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>, bool, bool) {
     let ctx = state.ui_renderer.winit.egui_ctx();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(stopwatch) = state.stopwatch.as_mut() {
@@ -709,43 +709,8 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
         }
     }
 
-    // Handle connection requests
-    if connect_requested && state.chat_state.use_mcp_client {
-        log::info!("🔌 Manual connection requested");
-        let server_url = state.chat_state.mcp_server_url.clone();
-        
-        // Add system message about connection attempt
-        state.chat_state.add_message("🔌 Connecting to MCP server...".to_string(), false);
-        
-        // Spawn async task to connect
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // For native builds, use async runtime
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            std::thread::spawn(move || {
-                // This is a basic connection test - in a full implementation,
-                // you'd establish a persistent SSE connection here
-                match rt.block_on(crate::chat::test_server_connection(&server_url)) {
-                    Ok(_) => {
-                        log::info!("✅ Connection test successful");
-                        // In a real implementation, the connection status would be updated
-                        // by the actual SSE connection establishment
-                    }
-                    Err(e) => {
-                        log::error!("❌ Connection test failed: {}", e);
-                        // The error will be handled when the next message is sent
-                    }
-                }
-            });
-        }
-        
-        #[cfg(target_arch = "wasm32")]
-        {
-            // For WASM builds, we'll test connection on next message
-            // In a full implementation, you'd use the browser's EventSource API here
-            log::info!("🌐 WASM: Connection will be tested on next message");
-        }
-    }
+    // Handle connection requests - this will be processed in the main thread
+    // We just mark the request here, actual connection happens in lib.rs
 
     if disconnect_requested {
         log::info!("🔌 Manual disconnection requested");
@@ -775,7 +740,7 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
             state.start_tracking_shot();
         }
     }
-    return (requested_repaint, chat_message);
+    return (requested_repaint, chat_message, connect_requested, disconnect_requested);
 }
 
 enum SetCamera {

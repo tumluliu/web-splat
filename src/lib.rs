@@ -536,13 +536,71 @@ impl WindowContext {
     /// returns whether redraw is required
     fn ui(&mut self) -> (bool, egui::FullOutput) {
         self.ui_renderer.begin_frame(&self.window);
-        let (request_redraw, chat_message) = ui::ui(self);
+        let (request_redraw, chat_message, connect_requested, disconnect_requested) = ui::ui(self);
 
         // Handle chat message if present
         if let Some(message) = chat_message {
             log::info!("Chat message received: {}", message);
             self.handle_chat_message(message);
             log::info!("Chat message handling complete");
+        }
+
+        // Handle connection requests
+        if connect_requested && self.chat_state.use_mcp_client {
+            log::info!("🔌 Manual connection requested");
+            let server_url = self.chat_state.mcp_server_url.clone();
+            
+            // Add system message about connection attempt
+            self.chat_state.add_message("🔌 Connecting to MCP server...".to_string(), false);
+            
+            // Spawn async task to connect
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                match rt.block_on(self.chat_state.connect_to_server(&server_url)) {
+                    Ok(_) => {
+                        log::info!("✅ Persistent MCP connection established");
+                        self.chat_state.add_message("✅ Connected to MCP server".to_string(), false);
+                    }
+                    Err(e) => {
+                        log::error!("❌ Persistent MCP connection failed: {}", e);
+                        self.chat_state.add_message(format!("❌ Connection failed: {}", e), false);
+                    }
+                }
+            }
+            
+            #[cfg(target_arch = "wasm32")]
+            {
+                // For WASM builds, spawn an async task
+                log::info!("🌐 WASM: Attempting persistent MCP connection");
+                let mut chat_state_clone = std::mem::take(&mut self.chat_state);
+                let server_url_clone = server_url.clone();
+                
+                wasm_bindgen_futures::spawn_local(async move {
+                    match chat_state_clone.connect_to_server(&server_url_clone).await {
+                        Ok(_) => {
+                            log::info!("✅ WASM persistent MCP connection established");
+                            chat_state_clone.add_message("✅ Connected to MCP server".to_string(), false);
+                        }
+                        Err(e) => {
+                            log::error!("❌ WASM persistent MCP connection failed: {}", e);
+                            chat_state_clone.add_message(format!("❌ Connection failed: {}", e), false);
+                        }
+                    }
+                    // TODO: We need a way to restore the chat_state back to self
+                    // This is a limitation of the current architecture in WASM
+                });
+                
+                // For now, just add a message that connection was attempted
+                self.chat_state.add_message("🔌 Connection attempt started...".to_string(), false);
+            }
+        }
+
+        // Handle disconnection requests
+        if disconnect_requested {
+            log::info!("🔌 Manual disconnection requested");
+            self.chat_state.disconnect_from_server();
+            self.chat_state.add_message("🔌 Disconnected from MCP server".to_string(), false);
         }
 
         let shapes = self.ui_renderer.end_frame(&self.window);
@@ -580,7 +638,26 @@ impl WindowContext {
             // Use async runtime with proper error handling
             let rt = tokio::runtime::Runtime::new().unwrap();
             
-            // Use blocking approach for now (can be optimized later with channels)
+            // Try persistent MCP client first if connected and enabled
+            if use_mcp_client && self.chat_state.mcp_client.is_some() {
+                log::info!("🔗 Using persistent MCP client for message");
+                match rt.block_on(self.chat_state.send_message_with_persistent_client(
+                    msg_clone.clone(), current_location
+                )) {
+                    Ok(response) => {
+                        log::info!("✅ Persistent MCP client request succeeded");
+                        self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Connected);
+                        self.pending_chat_responses.push((message, response));
+                        return;
+                    }
+                    Err(e) => {
+                        log::warn!("⚠️ Persistent MCP client failed: {}, falling back to enhanced mode", e);
+                        // Fall through to enhanced mode
+                    }
+                }
+            }
+            
+            // Fall back to enhanced mode (creates new client per message)
             match rt.block_on(crate::chat::send_chat_message_enhanced(
                 msg_clone, &server_url_clone, current_location, use_mcp_client
             )) {
@@ -610,26 +687,60 @@ impl WindowContext {
             let request_id = format!("{}_{}", message.len(), chrono::Utc::now().timestamp_millis());
             self.chat_state.pending_request_id = Some(request_id.clone());
             
-            wasm_bindgen_futures::spawn_local(async move {
-                log::info!("🔄 Starting enhanced WASM request...");
-                match crate::chat::send_chat_message_enhanced(
-                    msg_clone.clone(), 
-                    &server_url_clone, 
-                    current_location, 
-                    use_mcp_client
-                ).await {
-                    Ok(response) => {
-                        log::info!("✅ Enhanced WASM request successful!");
-                        crate::chat::store_async_response(request_id, msg_clone, response);
+            // Try persistent MCP client first if connected and enabled
+            if use_mcp_client && self.chat_state.mcp_client.is_some() {
+                log::info!("🔗 Attempting WASM persistent MCP client");
+                
+                let req_id = request_id.clone();
+                let msg_for_persistent = msg_clone.clone();
+                
+                wasm_bindgen_futures::spawn_local(async move {
+                    // Note: In WASM, the persistent client might not be fully implemented yet
+                    // This is a placeholder for when WASM persistent clients are ready
+                    log::warn!("🌐 WASM persistent MCP client not yet fully implemented, falling back to enhanced mode");
+                    
+                    // Fall back to enhanced mode
+                    match crate::chat::send_chat_message_enhanced(
+                        msg_for_persistent.clone(), 
+                        &server_url_clone, 
+                        current_location, 
+                        use_mcp_client
+                    ).await {
+                        Ok(response) => {
+                            log::info!("✅ Enhanced WASM fallback successful!");
+                            crate::chat::store_async_response(req_id, msg_for_persistent, response);
+                        }
+                        Err(e) => {
+                            log::error!("❌ Enhanced WASM fallback failed: {}", e);
+                            // Use mock response as fallback
+                            let fallback = ui::create_mock_response(&msg_for_persistent);
+                            crate::chat::store_async_response(req_id, msg_for_persistent, fallback);
+                        }
                     }
-                    Err(e) => {
-                        log::error!("❌ Enhanced WASM request failed: {}", e);
-                        // Use mock response as fallback
-                        let fallback = ui::create_mock_response(&msg_clone);
-                        crate::chat::store_async_response(request_id, msg_clone, fallback);
+                });
+            } else {
+                // Use enhanced mode (creates new client per message)
+                wasm_bindgen_futures::spawn_local(async move {
+                    log::info!("🔄 Starting enhanced WASM request...");
+                    match crate::chat::send_chat_message_enhanced(
+                        msg_clone.clone(), 
+                        &server_url_clone, 
+                        current_location, 
+                        use_mcp_client
+                    ).await {
+                        Ok(response) => {
+                            log::info!("✅ Enhanced WASM request successful!");
+                            crate::chat::store_async_response(request_id, msg_clone, response);
+                        }
+                        Err(e) => {
+                            log::error!("❌ Enhanced WASM request failed: {}", e);
+                            // Use mock response as fallback
+                            let fallback = ui::create_mock_response(&msg_clone);
+                            crate::chat::store_async_response(request_id, msg_clone, fallback);
+                        }
                     }
-                }
-            });
+                });
+            }
         }
         
         log::info!("📋 Enhanced chat message processing initiated");

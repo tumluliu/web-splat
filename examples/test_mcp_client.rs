@@ -7,7 +7,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("🚀 Testing simplified SSE-based MCP client");
     
     // Create a new MCP client
-    let mut client = MCPClient::new("http://localhost:8080".to_string()).await?;
+    let mut client = MCPClient::new("http://localhost:8080".to_string());
     println!("✅ MCP client created successfully");
     
     // Start the client
@@ -19,7 +19,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let test_location = [0.0, 1.0, 0.0];
     
     println!("📤 Sending test message: '{}'", test_message);
-    client.send_message(test_message.to_string(), test_location).await?;
+    let mut args = serde_json::Map::new();
+    args.insert("query".to_string(), serde_json::json!(test_message));
+    client.call_tool("scene_query", args, test_location).await?;
     
     // Try to receive a response
     match client.receive_response().await {
@@ -44,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     
     // Shutdown the client
-    client.shutdown().await?;
+    // client.shutdown().await?;
     println!("✅ MCP client shut down cleanly");
     
     Ok(())

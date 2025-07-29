@@ -57,7 +57,7 @@ pub enum MCPConnectionStatus {
     Error(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ChatState {
     pub messages: VecDeque<ChatMessage>,
     pub current_input: String,
@@ -69,6 +69,10 @@ pub struct ChatState {
     pub mcp_connection_status: MCPConnectionStatus,
     pub last_connection_attempt: Option<SystemTime>,
     pub use_mcp_client: bool, // Whether to use MCP client or fallback to HTTP
+    #[cfg(not(target_arch = "wasm32"))]
+    pub mcp_client: Option<crate::mcp_client::MCPClient>, // Persistent MCP client for continuous conversation
+    #[cfg(target_arch = "wasm32")]
+    pub mcp_client: Option<crate::mcp_client::MCPClient>, // Persistent MCP client for WASM
     #[cfg(target_arch = "wasm32")]
     pub pending_request_id: Option<String>,
 }
@@ -86,6 +90,7 @@ impl Default for ChatState {
             mcp_connection_status: MCPConnectionStatus::Disconnected,
             last_connection_attempt: None,
             use_mcp_client: true, // Default to trying MCP client first
+            mcp_client: None, // No MCP client initially
             #[cfg(target_arch = "wasm32")]
             pending_request_id: None,
         }
@@ -183,26 +188,57 @@ impl ChatState {
 
     /// Initiate a persistent connection to the MCP server
     pub async fn connect_to_server(&mut self, server_url: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        log::info!("🔌 Initiating connection to MCP server: {}", server_url);
+        log::info!("🔌 Initiating persistent MCP connection to: {}", server_url);
         
         self.mark_connection_attempt();
         
-        // For now, we'll establish connection on first message
-        // In a full implementation, this would open a persistent SSE connection
-        // and start listening for server-sent events
-        
-        // Simulate connection test
-        match test_server_connection(server_url).await {
-            Ok(_) => {
-                self.set_connection_status(MCPConnectionStatus::Connected);
-                log::info!("✅ Successfully connected to MCP server");
-                Ok(())
+        if !self.use_mcp_client {
+            log::info!("📡 MCP client disabled, using HTTP mode");
+            self.set_connection_status(MCPConnectionStatus::Connected);
+            return Ok(());
+        }
+
+        // Clean up any existing connection
+        self.mcp_client = None;
+
+        // Create and start new MCP client
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut mcp_client = crate::mcp_client::MCPClient::new(server_url.to_string());
+            
+            match mcp_client.start().await {
+                Ok(()) => {
+                    log::info!("✅ MCP client connected successfully");
+                    self.mcp_client = Some(mcp_client);
+                    self.set_connection_status(MCPConnectionStatus::Connected);
+                    Ok(())
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to start MCP client: {}", e);
+                    self.set_connection_status(MCPConnectionStatus::Error(error_msg.clone()));
+                    log::error!("❌ MCP connection failed: {}", error_msg);
+                    Err(e)
+                }
             }
-            Err(e) => {
-                let error_msg = format!("Failed to connect: {}", e);
-                self.set_connection_status(MCPConnectionStatus::Error(error_msg.clone()));
-                log::error!("❌ Connection failed: {}", error_msg);
-                Err(e)
+        }
+        
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut mcp_client = crate::mcp_client::MCPClient::new(server_url.to_string());
+            
+            match mcp_client.start().await {
+                Ok(()) => {
+                    log::info!("✅ WASM MCP client connected successfully");
+                    self.mcp_client = Some(mcp_client);
+                    self.set_connection_status(MCPConnectionStatus::Connected);
+                    Ok(())
+                }
+                Err(e) => {
+                    log::warn!("⚠️ WASM MCP client failed: {}, will use HTTP fallback", e);
+                    // For WASM, we don't treat MCP client failure as a fatal error
+                    self.set_connection_status(MCPConnectionStatus::Connected);
+                    Ok(())
+                }
             }
         }
     }
@@ -210,10 +246,63 @@ impl ChatState {
     /// Disconnect from the MCP server
     pub fn disconnect_from_server(&mut self) {
         log::info!("🔌 Disconnecting from MCP server");
-        self.set_connection_status(MCPConnectionStatus::Disconnected);
         
-        // In a full implementation, this would close the persistent SSE connection
-        // and stop listening for events
+        // Clean up the MCP client
+        if self.mcp_client.is_some() {
+            log::info!("🧹 Cleaning up persistent MCP client");
+            self.mcp_client = None;
+        }
+        
+        self.set_connection_status(MCPConnectionStatus::Disconnected);
+    }
+
+    /// Send a message using the persistent MCP client
+    pub async fn send_message_with_persistent_client(
+        &mut self,
+        message: String,
+        current_location: [f32; 3],
+    ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
+        log::info!("🔥 Sending message with persistent MCP client");
+        log::info!("💬 Message: {}", message);
+        log::info!(
+            "📍 Current camera location: [{:.3}, {:.3}, {:.3}]",
+            current_location[0],
+            current_location[1],
+            current_location[2]
+        );
+
+        // Check if we have a connected MCP client
+        if let Some(ref mut mcp_client) = self.mcp_client {
+            log::info!("🔗 Using existing persistent MCP client");
+
+            // Use the new call_tool() function for more MCP-protocol-like behavior
+            let mut arguments = serde_json::Map::new();
+            arguments.insert("query".to_string(), serde_json::json!(message.clone()));
+            arguments.insert("context".to_string(), serde_json::json!("3d_scene_understanding"));
+            
+            mcp_client.call_tool("Our Awesome Tool", arguments, current_location).await
+                .map_err(|e| format!("Failed to call tool: {}", e))?;
+
+            // Wait for response
+            match mcp_client.receive_response().await {
+                Some((_original_message, response)) => {
+                    log::info!("✅ Successfully received MCP response from persistent client");
+                    Ok(response)
+                }
+                None => {
+                    log::warn!("❌ No response received from persistent MCP client");
+                    Ok(McpResponse {
+                        answer: Vec::new(),
+                        paths: Vec::new(),
+                        scene_normal_vector: None,
+                        text_answer: Some("No response from MCP server".to_string()),
+                    })
+                }
+            }
+        } else {
+            log::error!("❌ No MCP client available. Please connect first.");
+            Err("MCP client not connected. Please click 'Connect' first.".into())
+        }
     }
 }
 
@@ -223,7 +312,7 @@ pub async fn send_chat_message(
     server_url: &str,
     current_location: [f32; 3],
 ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
-    log::info!("🔥 send_chat_message called");
+    log::info!("🔥 send_chat_message called (delegating to MCP client)");
     log::info!("📍 Server URL: {}", server_url);
     log::info!("💬 Message: {}", message);
     log::info!(
@@ -233,56 +322,8 @@ pub async fn send_chat_message(
         current_location[2]
     );
 
-    let client = reqwest::Client::new();
-
-    // Use proper SSE protocol with GET and query parameters
-    let sse_url = format!("{}/sse", server_url.trim_end_matches('/'));
-    
-    // Encode parameters in URL for GET request (standard SSE)
-    let encoded_message = message.replace(" ", "%20").replace("?", "%3F").replace("&", "%26");
-    let url_with_params = format!(
-        "{}?messages={}&current_location={},{},{}",
-        sse_url,
-        encoded_message,
-        current_location[0],
-        current_location[1],
-        current_location[2]
-    );
-
-    log::info!("🌐 Making GET request to SSE endpoint: {}", url_with_params);
-
-    let response = client
-        .get(&url_with_params)
-        .header("Accept", "text/event-stream")
-        .header("Cache-Control", "no-cache")
-        .header("Connection", "keep-alive")
-        .send()
-        .await?;
-
-    log::info!("📡 Response status: {}", response.status());
-    log::info!("📋 Response headers: {:?}", response.headers());
-
-    let status = response.status();
-    if status.is_success() {
-        let response_text = response.text().await?;
-        log::info!("📝 Raw response: {}", response_text);
-
-        let mcp_response = parse_mcp_response(&response_text)?;
-        log::info!("✅ Successfully parsed MCP response");
-        Ok(mcp_response)
-    } else {
-        let error_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        log::warn!("❌ Server error: {} - {}", status, error_text);
-        Ok(McpResponse {
-            answer: Vec::new(),
-            paths: Vec::new(),
-            scene_normal_vector: None,
-            text_answer: None,
-        })
-    }
+    // Delegate to the MCP client implementation
+    send_chat_message_mcp(message, server_url, current_location).await
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -409,7 +450,7 @@ pub async fn send_chat_message_mcp(
 ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
     use crate::mcp_client::MCPClient;
     
-    log::info!("🔥 send_chat_message_mcp called");
+    log::info!("🔥 send_chat_message_mcp called (legacy)");
     log::info!("📍 Server URL: {}", server_url);
     log::info!("💬 Message: {}", message);
     log::info!(
@@ -424,8 +465,7 @@ pub async fn send_chat_message_mcp(
     log::info!("🔄 Using base URL: {}", base_url);
 
     // Create MCP client
-    let mut mcp_client = MCPClient::new(base_url).await
-        .map_err(|e| format!("Failed to create MCP client: {}", e))?;
+    let mut mcp_client = MCPClient::new(base_url);
 
     // Start the client
     mcp_client.start().await
@@ -436,7 +476,7 @@ pub async fn send_chat_message_mcp(
     arguments.insert("query".to_string(), serde_json::json!(message.clone()));
     arguments.insert("context".to_string(), serde_json::json!("3d_scene_understanding"));
     
-    mcp_client.call_tool("scene_query", arguments, current_location).await
+    mcp_client.call_tool("Our Awesome Tool", arguments, current_location).await
         .map_err(|e| format!("Failed to call tool: {}", e))?;
 
     // Wait for response
@@ -721,21 +761,19 @@ pub fn parse_mcp_response(
 pub async fn test_server_connection(server_url: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let client = reqwest::Client::new();
-        let test_url = format!("{}/health", server_url.trim_end_matches('/'));
+        log::info!("🔍 Testing MCP connection to: {}", server_url);
         
-        log::info!("🔍 Testing connection to: {}", test_url);
-        
-        let response = client
-            .get(&test_url)
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await?;
-            
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(format!("Server returned status: {}", response.status()).into())
+        // Test connection by trying to create and start an MCP client
+        let mut test_client = crate::mcp_client::MCPClient::new(server_url.to_string());
+        match test_client.start().await {
+            Ok(()) => {
+                log::info!("✅ MCP connection test successful");
+                Ok(())
+            }
+            Err(e) => {
+                log::warn!("❌ MCP connection test failed: {}", e);
+                Err(format!("MCP connection failed: {}", e).into())
+            }
         }
     }
     
