@@ -297,6 +297,10 @@ pub struct WindowContext {
     chat_state: ChatState,
     pending_chat_responses: Vec<(String, McpResponse)>,
     
+    // Persistent MCP client for the entire application lifetime
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_client: Option<crate::mcp_client::MCPClient>,
+    
     // Ground up direction for object positioning only (camera rotations always use Y-up)
     ground_up_direction: Vector3<f32>,
 }
@@ -485,6 +489,9 @@ impl WindowContext {
             },
             pending_chat_responses: Vec::new(),
             
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_client: None, // Will be initialized in open_window
+            
             // Use the scene's ground up direction from initialization
             ground_up_direction: scene_ground_up_direction,
         })
@@ -545,81 +552,7 @@ impl WindowContext {
             log::info!("Chat message handling complete");
         }
 
-        // Handle connection requests
-        if connect_requested && self.chat_state.use_mcp_client {
-            log::info!("🔌 Manual connection requested");
-            let server_url = self.chat_state.mcp_server_url.clone();
-            
-            // Add system message about connection attempt
-            self.chat_state.add_message("🔌 Connecting to MCP server...".to_string(), false);
-            
-            // Spawn async task to connect
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                match rt.block_on(self.chat_state.connect_to_server(&server_url)) {
-                    Ok(_) => {
-                        log::info!("✅ Persistent MCP connection established");
-                        self.chat_state.add_message("✅ Connected to MCP server".to_string(), false);
-                    }
-                    Err(e) => {
-                        log::error!("❌ Persistent MCP connection failed: {}", e);
-                        self.chat_state.add_message(format!("❌ Connection failed: {}", e), false);
-                    }
-                }
-            }
-            
-            #[cfg(target_arch = "wasm32")]
-            {
-                // For WASM builds, spawn an async task
-                log::info!("🌐 WASM: Attempting persistent MCP connection");
-                let mut chat_state_clone = std::mem::take(&mut self.chat_state);
-                let server_url_clone = server_url.clone();
-                
-                wasm_bindgen_futures::spawn_local(async move {
-                    match chat_state_clone.connect_to_server(&server_url_clone).await {
-                        Ok(_) => {
-                            log::info!("✅ WASM persistent MCP connection established");
-                            chat_state_clone.add_message("✅ Connected to MCP server".to_string(), false);
-                        }
-                        Err(e) => {
-                            log::error!("❌ WASM persistent MCP connection failed: {}", e);
-                            chat_state_clone.add_message(format!("❌ Connection failed: {}", e), false);
-                        }
-                    }
-                    // TODO: We need a way to restore the chat_state back to self
-                    // This is a limitation of the current architecture in WASM
-                });
-                
-                // For now, just add a message that connection was attempted
-                self.chat_state.add_message("🔌 Connection attempt started...".to_string(), false);
-            }
-        }
-
-        // Handle disconnection requests
-        if disconnect_requested {
-            log::info!("🔌 Manual disconnection requested");
-            
-            // Use async runtime to handle disconnection since disconnect_from_server is now async
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(self.chat_state.disconnect_from_server());
-                self.chat_state.add_message("🔌 Disconnected from MCP server".to_string(), false);
-            }
-            
-            #[cfg(target_arch = "wasm32")]
-            {
-                // For WASM, spawn async task for proper cleanup
-                wasm_bindgen_futures::spawn_local(async {
-                    log::info!("✅ WASM disconnection completed");
-                });
-                // For now, just clear the client directly in WASM
-                self.chat_state.mcp_client = None;
-                self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Disconnected);
-                self.chat_state.add_message("🔌 Disconnected from MCP server".to_string(), false);
-            }
-        }
+        // Connection is now automatic - no manual connect/disconnect needed
 
         let shapes = self.ui_renderer.end_frame(&self.window);
 
@@ -657,20 +590,31 @@ impl WindowContext {
             let rt = tokio::runtime::Runtime::new().unwrap();
             
             // Try persistent MCP client first if connected and enabled
-            if use_mcp_client && self.chat_state.mcp_client.is_some() {
+            if use_mcp_client && self.mcp_client.is_some() {
                 log::info!("🔗 Using persistent MCP client for message");
-                match rt.block_on(self.chat_state.send_message_with_persistent_client(
-                    msg_clone.clone(), current_location
-                )) {
-                    Ok(response) => {
-                        log::info!("✅ Persistent MCP client request succeeded");
-                        self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Connected);
-                        self.pending_chat_responses.push((message, response));
-                        return;
-                    }
-                    Err(e) => {
-                        log::warn!("⚠️ Persistent MCP client failed: {}, falling back to enhanced mode", e);
-                        // Fall through to enhanced mode
+                
+                // Get the persistent client from WindowContext
+                if let Some(ref mut mcp_client) = self.mcp_client {
+                    match rt.block_on(mcp_client.call_tool(
+                        "Our Awesome Tool",
+                        {
+                            let mut args = serde_json::Map::new();
+                            args.insert("query".to_string(), serde_json::json!(msg_clone.clone()));
+                            args.insert("context".to_string(), serde_json::json!("3d_scene_understanding"));
+                            args
+                        },
+                        current_location
+                    )) {
+                        Ok(response) => {
+                            log::info!("✅ Persistent MCP client request succeeded");
+                            self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Connected);
+                            self.pending_chat_responses.push((message, response));
+                            return;
+                        }
+                        Err(e) => {
+                            log::warn!("⚠️ Persistent MCP client failed: {}, falling back to HTTP", e);
+                            // Fall through to HTTP mode
+                        }
                     }
                 }
             }
@@ -1567,6 +1511,28 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
 
     let mut state = WindowContext::new(window, file, &config, scene.as_ref()).await.unwrap();
     state.pointcloud_file_path = pointcloud_file_path;
+
+    // Initialize persistent MCP client for the entire application lifetime
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        log::info!("🔌 Initializing persistent MCP client for application lifetime");
+        let server_url = config.mcp_server_url.clone();
+        
+        // Create and start the MCP client
+        let mut mcp_client = crate::mcp_client::MCPClient::new(server_url);
+        match mcp_client.start().await {
+            Ok(()) => {
+                log::info!("✅ Persistent MCP client initialized successfully");
+                state.mcp_client = Some(mcp_client);
+                state.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Connected);
+            }
+            Err(e) => {
+                log::warn!("⚠️ Failed to initialize persistent MCP client: {}", e);
+                state.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Error(e.to_string()));
+                // Continue without MCP client - will fall back to HTTP
+            }
+        }
+    }
 
     if let Some(scene) = scene {
         state.set_scene(scene);

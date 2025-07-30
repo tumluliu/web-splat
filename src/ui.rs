@@ -709,10 +709,7 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>, bool, bool
         }
     }
 
-    // Handle connection requests - this will be processed in the main thread
-    // We just mark the request here, actual connection happens in lib.rs
-
-    // Note: disconnect_requested needs to be handled in lib.rs since disconnect_from_server is now async
+    // Connection is now automatic - no manual connect/disconnect needed
 
     // Handle clear highlights
     if clear_highlights {
@@ -736,7 +733,7 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>, bool, bool
             state.start_tracking_shot();
         }
     }
-    return (requested_repaint, chat_message, connect_requested, disconnect_requested);
+    return (requested_repaint, chat_message, false, false); // connect_requested and disconnect_requested are no longer used
 }
 
 enum SetCamera {
@@ -981,18 +978,13 @@ pub fn chat_ui(
                         crate::chat::MCPConnectionStatus::Connected | crate::chat::MCPConnectionStatus::Connecting
                     );
 
-                    if ui.add_enabled(can_connect, egui::Button::new("🔌 Connect")).clicked() {
-                        connect_requested = true;
-                    }
+                    // Show automatic connection status (no manual connect/disconnect needed)
+                    ui.label(format!("🔗 {}", state.chat_state.get_connection_status_text()));
                     
-                    if ui.add_enabled(can_disconnect, egui::Button::new("🔌 Disconnect")).clicked() {
-                        disconnect_requested = true;
-                    }
-
-                    // Show retry button for errors
+                    // Show retry button for errors (only if MCP client is enabled)
                     if let crate::chat::MCPConnectionStatus::Error(_) = state.chat_state.mcp_connection_status {
-                        if state.chat_state.can_retry_connection() {
-                            if ui.button("🔄 Retry").clicked() {
+                        if state.chat_state.can_retry_connection() && state.chat_state.use_mcp_client {
+                            if ui.button("🔄 Retry Connection").clicked() {
                                 connect_requested = true;
                             }
                         }
@@ -1042,7 +1034,7 @@ pub fn chat_ui(
             });
         });
 
-    (message_to_send, current_input, clear_highlights, server_url, font_size, use_mcp_client, connect_requested, disconnect_requested)
+    (message_to_send, current_input, clear_highlights, server_url, font_size, use_mcp_client, false, false) // connect_requested and disconnect_requested are no longer used
 }
 
 /// Create mock response for testing - replace with real async handling
