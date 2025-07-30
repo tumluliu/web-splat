@@ -244,15 +244,18 @@ impl ChatState {
     }
 
     /// Disconnect from the MCP server
-    pub fn disconnect_from_server(&mut self) {
+    pub async fn disconnect_from_server(&mut self) {
         log::info!("🔌 Disconnecting from MCP server");
         
-        // Clean up the MCP client
-        if self.mcp_client.is_some() {
-            log::info!("🧹 Cleaning up persistent MCP client");
-            self.mcp_client = None;
+        // Clean up the MCP client with proper disconnect
+        if let Some(ref client) = self.mcp_client {
+            log::info!("🧹 Properly disconnecting MCP client");
+            if let Err(e) = client.disconnect().await {
+                log::error!("❌ Error during MCP disconnect: {}", e);
+            }
         }
         
+        self.mcp_client = None;
         self.set_connection_status(MCPConnectionStatus::Disconnected);
     }
 
@@ -280,23 +283,15 @@ impl ChatState {
             arguments.insert("query".to_string(), serde_json::json!(message.clone()));
             arguments.insert("context".to_string(), serde_json::json!("3d_scene_understanding"));
             
-            mcp_client.call_tool("Our Awesome Tool", arguments, current_location).await
-                .map_err(|e| format!("Failed to call tool: {}", e))?;
-
-            // Wait for response
-            match mcp_client.receive_response().await {
-                Some((_original_message, response)) => {
-                    log::info!("✅ Successfully received MCP response from persistent client");
+            // Call the tool and get the response directly from rmcp
+            match mcp_client.call_tool("Our Awesome Tool", arguments, current_location).await {
+                Ok(response) => {
+                    log::info!("✅ Successfully received MCP response from persistent rmcp client");
                     Ok(response)
                 }
-                None => {
-                    log::warn!("❌ No response received from persistent MCP client");
-                    Ok(McpResponse {
-                        answer: Vec::new(),
-                        paths: Vec::new(),
-                        scene_normal_vector: None,
-                        text_answer: Some("No response from MCP server".to_string()),
-                    })
+                Err(e) => {
+                    log::error!("❌ rmcp tool call failed: {}", e);
+                    Err(format!("Failed to call tool via rmcp: {}", e).into())
                 }
             }
         } else {
@@ -476,23 +471,15 @@ pub async fn send_chat_message_mcp(
     arguments.insert("query".to_string(), serde_json::json!(message.clone()));
     arguments.insert("context".to_string(), serde_json::json!("3d_scene_understanding"));
     
-    mcp_client.call_tool("Our Awesome Tool", arguments, current_location).await
-        .map_err(|e| format!("Failed to call tool: {}", e))?;
-
-    // Wait for response
-    match mcp_client.receive_response().await {
-        Some((_original_message, response)) => {
-            log::info!("✅ Successfully received MCP response");
+    // Call the tool and get the response directly from rmcp
+    match mcp_client.call_tool("Our Awesome Tool", arguments, current_location).await {
+        Ok(response) => {
+            log::info!("✅ Successfully received MCP response from rmcp");
             Ok(response)
         }
-        None => {
-            log::warn!("❌ No response received from MCP server");
-            Ok(McpResponse {
-                answer: Vec::new(),
-                paths: Vec::new(),
-                scene_normal_vector: None,
-                text_answer: Some("No response from MCP server".to_string()),
-            })
+        Err(e) => {
+            log::error!("❌ rmcp tool call failed: {}", e);
+            Err(format!("Failed to call tool via rmcp: {}", e).into())
         }
     }
 }
@@ -520,8 +507,7 @@ pub async fn send_chat_message_mcp(
     log::info!("🔄 WASM: Using base URL: {}", base_url);
 
     // Create MCP client
-    let mut mcp_client = MCPClient::new(base_url).await
-        .map_err(|e| format!("Failed to create WASM MCP client: {}", e))?;
+    let mut mcp_client = MCPClient::new(base_url);
 
     // Start the client
     mcp_client.start().await
@@ -532,22 +518,20 @@ pub async fn send_chat_message_mcp(
     arguments.insert("query".to_string(), serde_json::json!(message.clone()));
     arguments.insert("context".to_string(), serde_json::json!("3d_scene_understanding"));
     
-    mcp_client.call_tool("scene_query", arguments, current_location).await
-        .map_err(|e| format!("Failed to call tool: {}", e))?;
-
-    // Wait for response
-    match mcp_client.receive_response().await {
-        Some((_original_message, response)) => {
-            log::info!("✅ WASM: Successfully received MCP response");
+    // Call the tool and get the response directly from rmcp (WASM)
+    match mcp_client.call_tool("Our Awesome Tool", arguments, current_location).await {
+        Ok(response) => {
+            log::info!("✅ WASM: Successfully received MCP response from rmcp");
             Ok(response)
         }
-        None => {
-            log::warn!("❌ WASM: No response received from MCP server");
+        Err(e) => {
+            log::error!("❌ WASM: rmcp tool call failed: {}", e);
+            // For WASM, we return a fallback response instead of failing
             Ok(McpResponse {
                 answer: Vec::new(),
                 paths: Vec::new(),
                 scene_normal_vector: None,
-                text_answer: Some("No response from MCP server (WASM)".to_string()),
+                text_answer: Some(format!("WASM rmcp not available: {}", e)),
             })
         }
     }

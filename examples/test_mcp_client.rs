@@ -21,12 +21,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("📤 Sending test message: '{}'", test_message);
     let mut args = serde_json::Map::new();
     args.insert("query".to_string(), serde_json::json!(test_message));
-    client.call_tool("scene_query", args, test_location).await?;
     
-    // Try to receive a response
-    match client.receive_response().await {
-        Some((source, response)) => {
-            println!("✅ Received response from: {}", source);
+    // Call the tool and get the response directly
+    match client.call_tool("Our Awesome Tool", args, test_location).await {
+        Ok(response) => {
+            println!("✅ Received response from rmcp tool call");
             if let Some(text) = &response.text_answer {
                 println!("💬 Text response: {}", text);
             }
@@ -40,8 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 println!("🗺️ Found {} navigation paths", response.paths.len());
             }
         }
-        None => {
-            println!("⚠️ No response received (this is expected if no MCP server is running)");
+        Err(e) => {
+            println!("⚠️ Tool call failed: {} (this is expected if no MCP server is running)", e);
         }
     }
     

@@ -712,11 +712,7 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>, bool, bool
     // Handle connection requests - this will be processed in the main thread
     // We just mark the request here, actual connection happens in lib.rs
 
-    if disconnect_requested {
-        log::info!("🔌 Manual disconnection requested");
-        state.chat_state.disconnect_from_server();
-        state.chat_state.add_message("🔌 Disconnected from MCP server".to_string(), false);
-    }
+    // Note: disconnect_requested needs to be handled in lib.rs since disconnect_from_server is now async
 
     // Handle clear highlights
     if clear_highlights {

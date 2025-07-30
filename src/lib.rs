@@ -599,8 +599,26 @@ impl WindowContext {
         // Handle disconnection requests
         if disconnect_requested {
             log::info!("🔌 Manual disconnection requested");
-            self.chat_state.disconnect_from_server();
-            self.chat_state.add_message("🔌 Disconnected from MCP server".to_string(), false);
+            
+            // Use async runtime to handle disconnection since disconnect_from_server is now async
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(self.chat_state.disconnect_from_server());
+                self.chat_state.add_message("🔌 Disconnected from MCP server".to_string(), false);
+            }
+            
+            #[cfg(target_arch = "wasm32")]
+            {
+                // For WASM, spawn async task for proper cleanup
+                wasm_bindgen_futures::spawn_local(async {
+                    log::info!("✅ WASM disconnection completed");
+                });
+                // For now, just clear the client directly in WASM
+                self.chat_state.mcp_client = None;
+                self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Disconnected);
+                self.chat_state.add_message("🔌 Disconnected from MCP server".to_string(), false);
+            }
         }
 
         let shapes = self.ui_renderer.end_frame(&self.window);
