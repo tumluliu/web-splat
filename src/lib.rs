@@ -675,17 +675,18 @@ impl WindowContext {
                 }
             }
             
-            // Fall back to enhanced mode (creates new client per message)
-            match rt.block_on(crate::chat::send_chat_message_enhanced(
-                msg_clone, &server_url_clone, current_location, use_mcp_client
+            // Fall back to HTTP mode (no persistent client)
+            log::info!("🌐 Falling back to HTTP mode");
+            match rt.block_on(crate::chat::send_chat_message(
+                msg_clone, &server_url_clone, current_location
             )) {
                 Ok(response) => {
-                    log::info!("✅ Enhanced native request succeeded");
+                    log::info!("✅ HTTP fallback succeeded");
                     self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Connected);
                     self.pending_chat_responses.push((message, response));
                 }
                 Err(e) => {
-                    log::error!("❌ Enhanced native request failed: {}", e);
+                    log::error!("❌ HTTP fallback failed: {}", e);
                     self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Error(e.to_string()));
                     // Use mock response as ultimate fallback
                     let mock_response = ui::create_mock_response(&message);
@@ -717,19 +718,19 @@ impl WindowContext {
                     // This is a placeholder for when WASM persistent clients are ready
                     log::warn!("🌐 WASM persistent MCP client not yet fully implemented, falling back to enhanced mode");
                     
-                    // Fall back to enhanced mode
-                    match crate::chat::send_chat_message_enhanced(
+                    // Fall back to HTTP mode
+                    log::info!("🌐 WASM: Falling back to HTTP mode");
+                    match crate::chat::send_chat_message(
                         msg_for_persistent.clone(), 
                         &server_url_clone, 
-                        current_location, 
-                        use_mcp_client
+                        current_location
                     ).await {
                         Ok(response) => {
-                            log::info!("✅ Enhanced WASM fallback successful!");
+                            log::info!("✅ WASM HTTP fallback successful!");
                             crate::chat::store_async_response(req_id, msg_for_persistent, response);
                         }
                         Err(e) => {
-                            log::error!("❌ Enhanced WASM fallback failed: {}", e);
+                            log::error!("❌ WASM HTTP fallback failed: {}", e);
                             // Use mock response as fallback
                             let fallback = ui::create_mock_response(&msg_for_persistent);
                             crate::chat::store_async_response(req_id, msg_for_persistent, fallback);
@@ -737,21 +738,20 @@ impl WindowContext {
                     }
                 });
             } else {
-                // Use enhanced mode (creates new client per message)
+                // Use HTTP mode (no persistent client)
                 wasm_bindgen_futures::spawn_local(async move {
-                    log::info!("🔄 Starting enhanced WASM request...");
-                    match crate::chat::send_chat_message_enhanced(
+                    log::info!("🔄 Starting WASM HTTP request...");
+                    match crate::chat::send_chat_message(
                         msg_clone.clone(), 
                         &server_url_clone, 
-                        current_location, 
-                        use_mcp_client
+                        current_location
                     ).await {
                         Ok(response) => {
-                            log::info!("✅ Enhanced WASM request successful!");
+                            log::info!("✅ WASM HTTP request successful!");
                             crate::chat::store_async_response(request_id, msg_clone, response);
                         }
                         Err(e) => {
-                            log::error!("❌ Enhanced WASM request failed: {}", e);
+                            log::error!("❌ WASM HTTP request failed: {}", e);
                             // Use mock response as fallback
                             let fallback = ui::create_mock_response(&msg_clone);
                             crate::chat::store_async_response(request_id, msg_clone, fallback);

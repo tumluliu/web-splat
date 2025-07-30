@@ -317,8 +317,10 @@ pub async fn send_chat_message(
         current_location[2]
     );
 
-    // Delegate to the MCP client implementation
-    send_chat_message_mcp(message, server_url, current_location).await
+    // This function should not be used directly anymore
+    // Instead, use the persistent client from ChatState
+    log::warn!("⚠️ send_chat_message is deprecated. Use ChatState's persistent client instead.");
+    Err("Use ChatState's persistent MCP client instead of creating new connections".into())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -443,8 +445,6 @@ pub async fn send_chat_message_mcp(
     server_url: &str,
     current_location: [f32; 3],
 ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::mcp_client::MCPClient;
-    
     log::info!("🔥 send_chat_message_mcp called (legacy)");
     log::info!("📍 Server URL: {}", server_url);
     log::info!("💬 Message: {}", message);
@@ -455,33 +455,10 @@ pub async fn send_chat_message_mcp(
         current_location[2]
     );
 
-    // Use the server URL directly (remove /sse suffix if present for our implementation)
-    let base_url = server_url.trim_end_matches("/sse").to_string();
-    log::info!("🔄 Using base URL: {}", base_url);
-
-    // Create MCP client
-    let mut mcp_client = MCPClient::new(base_url);
-
-    // Start the client
-    mcp_client.start().await
-        .map_err(|e| format!("Failed to start MCP client: {}", e))?;
-
-    // Use the new call_tool() function for more MCP-protocol-like behavior
-    let mut arguments = serde_json::Map::new();
-    arguments.insert("query".to_string(), serde_json::json!(message.clone()));
-    arguments.insert("context".to_string(), serde_json::json!("3d_scene_understanding"));
-    
-    // Call the tool and get the response directly from rmcp
-    match mcp_client.call_tool("Our Awesome Tool", arguments, current_location).await {
-        Ok(response) => {
-            log::info!("✅ Successfully received MCP response from rmcp");
-            Ok(response)
-        }
-        Err(e) => {
-            log::error!("❌ rmcp tool call failed: {}", e);
-            Err(format!("Failed to call tool via rmcp: {}", e).into())
-        }
-    }
+    // This function should not be used directly anymore
+    // Instead, use the persistent client from ChatState
+    log::warn!("⚠️ send_chat_message_mcp is deprecated. Use ChatState's persistent client instead.");
+    Err("Use ChatState's persistent MCP client instead of creating new connections".into())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -557,27 +534,10 @@ pub async fn send_chat_message_enhanced(
     if use_mcp_client {
         log::info!("🔧 Attempting MCP client connection...");
         
-        // Try our new MCP client implementation
-        match send_chat_message_mcp(message.clone(), server_url, current_location).await {
-            Ok(response) => {
-                log::info!("✅ MCP client succeeded");
-                return Ok(response);
-            }
-            Err(e) => {
-                log::warn!("⚠️ MCP client failed: {}, falling back to HTTP", e);
-                // Fall back to HTTP
-                match send_chat_message(message, server_url, current_location).await {
-                    Ok(response) => {
-                        log::info!("✅ HTTP fallback succeeded");
-                        return Ok(response);
-                    }
-                    Err(http_err) => {
-                        log::error!("❌ Both MCP and HTTP failed. MCP: {}, HTTP: {}", e, http_err);
-                        return Err(format!("Both MCP and HTTP failed. MCP: {}, HTTP: {}", e, http_err).into());
-                    }
-                }
-            }
-        }
+        // This function should not be used directly anymore
+        // Instead, use the persistent client from ChatState
+        log::warn!("⚠️ send_chat_message_enhanced is deprecated. Use ChatState's persistent client instead.");
+        Err("Use ChatState's persistent MCP client instead of creating new connections".into())
     } else {
         log::info!("🌐 Using HTTP client directly");
         send_chat_message(message, server_url, current_location).await
