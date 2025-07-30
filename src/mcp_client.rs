@@ -32,7 +32,6 @@ mod native {
     #[derive(Debug)]
     pub struct MCPClient {
         server_url: String,
-        transport: Arc<Mutex<Option<SseClientTransport<Client>>>>,
         client: Arc<Mutex<Option<RunningService<RoleClient, ClientInfo>>>>,
     }
 
@@ -41,7 +40,6 @@ mod native {
         pub fn new(server_url: String) -> Self {
             Self {
                 server_url,
-                transport: Arc::new(Mutex::new(None)),
                 client: Arc::new(Mutex::new(None)),
             }
         }
@@ -63,12 +61,6 @@ mod native {
             // Step 1: Create transport - following official example
             let transport = SseClientTransport::start(sse_url.as_str()).await?;
             
-            // Store the transport to keep it alive
-            {
-                let mut transport_guard = self.transport.lock().await;
-                *transport_guard = Some(transport);
-            }
-            
             // Step 2: Create client info - following official example
             let client_info = ClientInfo {
                 protocol_version: Default::default(),
@@ -79,11 +71,7 @@ mod native {
                 },
             };
             
-            // Step 3: Get the stored transport and serve it to get client - following official example
-            let mut transport_guard = self.transport.lock().await;
-            let transport = transport_guard.take()
-                .ok_or("Transport not initialized")?;
-            
+            // Step 3: Serve the transport to get client - following official example
             let client = client_info.serve(transport).await.map_err(|e| {
                 log::error!("client error: {:?}", e);
                 e
@@ -118,6 +106,10 @@ mod native {
             let client_guard = self.client.lock().await;
             let client = client_guard.as_ref()
                 .ok_or("MCP client not connected. Call start() first.")?;
+
+            // Debug: Print peer info before tool call
+            let peer_info = client.peer_info();
+            log::info!("🔗 Debug - Peer info before tool call: {:#?}", peer_info);
 
             // Prepare arguments for "Our Awesome Tool" with the exact format required:
             // {"query": "{\"messages\": \"...\", \"current_location\": [x,y,z]}"}
