@@ -40,7 +40,7 @@ pub struct PathResponse {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpResponse {
     #[serde(default)]
-    pub answer: Vec<SceneObject>,
+    pub objects: Vec<SceneObject>,
     #[serde(default)]
     pub paths: Vec<PathResponse>,
     #[serde(default)]
@@ -120,7 +120,7 @@ impl ChatState {
 
     pub fn set_highlights(&mut self, response: McpResponse) {
         self.clear_highlights();
-        self.highlighted_objects = response.answer;
+        self.highlighted_objects = response.objects;
 
         // If we have paths, convert the first path to ScenePath format
         if !response.paths.is_empty() {
@@ -719,7 +719,7 @@ pub fn parse_mcp_response(
         other => {
             log::warn!("Unexpected answer format: {:?}", other);
             return Ok(McpResponse {
-                answer: Vec::new(),
+                objects: Vec::new(),
                 paths: Vec::new(),
                 scene_normal_vector: None,
                 text_answer: None,
@@ -734,7 +734,7 @@ pub fn parse_mcp_response(
         text_answer
     );
     Ok(McpResponse {
-        answer,
+        objects: answer,
         paths,
         scene_normal_vector: raw_response.scene_normal_vector,
         text_answer,

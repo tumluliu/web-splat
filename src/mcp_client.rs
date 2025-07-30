@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::chat::McpResponse;
+use reqwest::Client;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MCPRequest {
@@ -25,11 +26,13 @@ mod native {
     use rmcp::transport::sse_client::SseClientTransport;
     use rmcp::service::{ServiceExt, RoleClient, RunningService};
     use rmcp::model::{ClientInfo, ClientCapabilities, Implementation, CallToolRequestParam};
+
     
     /// MCP Client using rmcp SSE transport - following official example patterns
     #[derive(Debug)]
     pub struct MCPClient {
         server_url: String,
+        transport: Arc<Mutex<Option<SseClientTransport<Client>>>>,
         client: Arc<Mutex<Option<RunningService<RoleClient, ClientInfo>>>>,
     }
 
@@ -38,6 +41,7 @@ mod native {
         pub fn new(server_url: String) -> Self {
             Self {
                 server_url,
+                transport: Arc::new(Mutex::new(None)),
                 client: Arc::new(Mutex::new(None)),
             }
         }
@@ -59,6 +63,12 @@ mod native {
             // Step 1: Create transport - following official example
             let transport = SseClientTransport::start(sse_url.as_str()).await?;
             
+            // Store the transport to keep it alive
+            {
+                let mut transport_guard = self.transport.lock().await;
+                *transport_guard = Some(transport);
+            }
+            
             // Step 2: Create client info - following official example
             let client_info = ClientInfo {
                 protocol_version: Default::default(),
@@ -69,7 +79,11 @@ mod native {
                 },
             };
             
-            // Step 3: Serve the transport to get client - following official example
+            // Step 3: Get the stored transport and serve it to get client - following official example
+            let mut transport_guard = self.transport.lock().await;
+            let transport = transport_guard.take()
+                .ok_or("Transport not initialized")?;
+            
             let client = client_info.serve(transport).await.map_err(|e| {
                 log::error!("client error: {:?}", e);
                 e
@@ -144,7 +158,7 @@ mod native {
             if result.content.is_empty() {
                 log::warn!("⚠️ Empty content from tool result");
                 return Ok(McpResponse {
-                    answer: Vec::new(),
+                    objects: Vec::new(),
                     paths: Vec::new(),
                     scene_normal_vector: None,
                     text_answer: Some("Empty response from server".to_string()),
@@ -168,7 +182,7 @@ mod native {
                         log::info!("📝 Text content is not structured JSON, treating as text answer");
                         // If it's not JSON, treat it as a simple text answer
                         Ok(McpResponse {
-                            answer: Vec::new(),
+                            objects: Vec::new(),
                             paths: Vec::new(),
                             scene_normal_vector: None,
                             text_answer: Some(text_str.to_string()),
@@ -178,7 +192,7 @@ mod native {
                 _ => {
                     log::warn!("⚠️ Unsupported content type from tool result");
                     Ok(McpResponse {
-                        answer: Vec::new(),
+                        objects: Vec::new(),
                         paths: Vec::new(),
                         scene_normal_vector: None,
                         text_answer: Some("Unsupported content type".to_string()),

@@ -1071,7 +1071,7 @@ pub fn create_mock_response(message: &str) -> McpResponse {
         };
         
         return McpResponse {
-            answer: Vec::new(),
+            objects: Vec::new(),
             paths: Vec::new(),
             scene_normal_vector: Some("[0.0,1.0,0.0]".to_string()),
             text_answer: Some(count_answer.to_string()),
@@ -1104,7 +1104,7 @@ pub fn create_mock_response(message: &str) -> McpResponse {
     };
 
     McpResponse {
-        answer: vec![object],
+        objects: vec![object],
         paths: Vec::new(),
         scene_normal_vector: Some("[0.0,1.0,0.0]".to_string()), // Y-up for testing
         text_answer: None,
@@ -1169,14 +1169,14 @@ pub fn format_response(response: &McpResponse, current_location: [f32; 3]) -> St
     }
     
     // Handle object query responses
-    if response.answer.is_empty() {
+    if response.objects.is_empty() {
         format!(
             "❌ No objects found for your query.\n📍 Searched from position: ({:.1}, {:.1}, {:.1})",
             current_location[0], current_location[1], current_location[2]
         )
     } else {
         let objects_list = response
-            .answer
+            .objects
             .iter()
             .map(|obj| {
                 if obj.aligned_bbox.len() >= 8 {
@@ -1201,8 +1201,8 @@ pub fn format_response(response: &McpResponse, current_location: [f32; 3]) -> St
             
         format!(
             "🎯 Found {} {}:\n  • {}\n📍 Query sent from: ({:.1}, {:.1}, {:.1})",
-            response.answer.len(),
-            if response.answer.len() == 1 { "object" } else { "objects" },
+            response.objects.len(),
+            if response.objects.len() == 1 { "object" } else { "objects" },
             objects_list,
             current_location[0], current_location[1], current_location[2]
         )

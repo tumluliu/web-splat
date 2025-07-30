@@ -25,9 +25,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             if let Some(text) = &response.text_answer {
                 println!("💬 Text Response: {}", text);
             }
-            if !response.answer.is_empty() {
-                println!("🎯 Found {} objects:", response.answer.len());
-                for obj in &response.answer {
+            if !response.objects.is_empty() {
+                println!("🎯 Found {} objects:", response.objects.len());
+                for obj in &response.objects {
                     println!("   - {}", obj.name);
                 }
             }
@@ -55,8 +55,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             if let Some(text) = &response.text_answer {
                 println!("💬 Text Response: {}", text);
             }
-            if !response.answer.is_empty() {
-                println!("🎯 Found {} objects:", response.answer.len());
+            if !response.objects.is_empty() {
+                println!("🎯 Found {} objects:", response.objects.len());
             }
         }
         Err(e) => {

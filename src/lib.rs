@@ -857,11 +857,11 @@ impl WindowContext {
             self.animate_camera_along_path_with_object(scene_path, &path_response.object);
         }
         // Check if this is an object response (has objects but no paths)
-        else if !response.answer.is_empty() {
+        else if !response.objects.is_empty() {
             // Log object bounding boxes and sizes for debugging
-            log::info!("📦 Found {} objects, analyzing sizes to select biggest for camera positioning:", response.answer.len());
+            log::info!("📦 Found {} objects, analyzing sizes to select biggest for camera positioning:", response.objects.len());
             
-            for (i, obj) in response.answer.iter().enumerate() {
+            for (i, obj) in response.objects.iter().enumerate() {
                 if obj.aligned_bbox.len() >= 8 {
                     // Calculate center and size from bounding box
                     let mut center = [0.0, 0.0, 0.0];
@@ -890,7 +890,7 @@ impl WindowContext {
             }
             
             // Update highlighting renderer
-            self.highlight_renderer.set_highlighted_objects(response.answer.clone(), &self.wgpu_context.device);
+            self.highlight_renderer.set_highlighted_objects(response.objects.clone(), &self.wgpu_context.device);
             self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
             
             // Animate camera to first object with Y-up positioning

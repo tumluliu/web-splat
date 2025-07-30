@@ -39,6 +39,7 @@ futures-intrusive = "0.5.0"
 splines = { features = [
     "cgmath",
 ], git = "https://github.com/KeKsBoTer/splines" }
+reqwest = "0.12.22"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = { version = "0.4.0", features = ["macro"] }
