@@ -88,6 +88,7 @@ mod native {
             }
             
             log::info!("✅ rmcp SSE client connected successfully");
+            log::info!("🔗 Client stored in MCPClient struct");
             Ok(())
         }
 
@@ -104,8 +105,12 @@ mod native {
 
             // Get the stored client
             let client_guard = self.client.lock().await;
+            log::info!("🔍 Debug - Attempting to get stored client...");
+            
             let client = client_guard.as_ref()
                 .ok_or("MCP client not connected. Call start() first.")?;
+            
+            log::info!("🔍 Debug - Successfully retrieved stored client");
 
             // Debug: Print peer info before tool call
             let peer_info = client.peer_info();
@@ -128,12 +133,23 @@ mod native {
             let arguments_map = tool_arguments.as_object().cloned();
 
             // Call the tool using rmcp client - following official example
-            let tool_result = client.call_tool(CallToolRequestParam {
+            log::info!("🔧 Debug - About to call tool: {}", tool_name);
+            log::info!("🔧 Debug - Tool arguments: {:?}", arguments_map);
+            
+            log::info!("🔧 Debug - Tool name: '{}'", tool_name);
+            let tool_result = match client.call_tool(CallToolRequestParam {
                 name: tool_name.to_string().into(),
                 arguments: arguments_map,
-            }).await?;
-
-            log::info!("✅ Tool call successful, parsing result");
+            }).await {
+                Ok(result) => {
+                    log::info!("✅ Tool call successful, parsing result");
+                    result
+                }
+                Err(e) => {
+                    log::error!("❌ Tool call failed with error: {:?}", e);
+                    return Err(Box::new(e));
+                }
+            };
 
             // Parse the result into our McpResponse format
             self.parse_tool_result(tool_result)
