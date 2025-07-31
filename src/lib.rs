@@ -590,31 +590,11 @@ impl WindowContext {
             let rt = tokio::runtime::Runtime::new().unwrap();
             
             // Try persistent MCP client first if connected and enabled
-            if use_mcp_client {
-                // Initialize MCP client lazily if not already initialized
-                if self.mcp_client.is_none() {
-                    log::info!("🔌 Initializing persistent MCP client on first use");
-                    let server_url = self.chat_state.mcp_server_url.clone();
-                    
-                    // Create and start the MCP client
-                    let mut mcp_client = crate::mcp_client::MCPClient::new(server_url);
-                    match rt.block_on(mcp_client.start()) {
-                        Ok(()) => {
-                            log::info!("✅ Persistent MCP client initialized successfully");
-                            self.mcp_client = Some(mcp_client);
-                            self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Connected);
-                        }
-                        Err(e) => {
-                            log::warn!("⚠️ Failed to initialize persistent MCP client: {}", e);
-                            self.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Error(e.to_string()));
-                            // Fall through to HTTP mode
-                        }
-                    }
-                }
+            if use_mcp_client && self.mcp_client.is_some() {
+                log::info!("🔗 Using persistent MCP client for message");
                 
-                // Use the persistent client if available
+                // Get the persistent client from WindowContext
                 if let Some(ref mut mcp_client) = self.mcp_client {
-                    log::info!("🔗 Using persistent MCP client for message");
                     match rt.block_on(mcp_client.call_tool(
                         "Our Awesome Tool",
                         {
@@ -1532,8 +1512,30 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
     let mut state = WindowContext::new(window, file, &config, scene.as_ref()).await.unwrap();
     state.pointcloud_file_path = pointcloud_file_path;
 
-    // MCP client will be initialized lazily when first needed
-    // This avoids async initialization issues during startup
+    // Initialize persistent MCP client for the entire application lifetime
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        log::info!("🔌 Initializing persistent MCP client for application lifetime");
+        let server_url = config.mcp_server_url.clone();
+        
+        // Create a Tokio runtime for MCP client initialization
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        
+        // Create and start the MCP client in the runtime
+        let mut mcp_client = crate::mcp_client::MCPClient::new(server_url);
+        match rt.block_on(mcp_client.start()) {
+            Ok(()) => {
+                log::info!("✅ Persistent MCP client initialized successfully");
+                state.mcp_client = Some(mcp_client);
+                state.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Connected);
+            }
+            Err(e) => {
+                log::warn!("⚠️ Failed to initialize persistent MCP client: {}", e);
+                state.chat_state.set_connection_status(crate::chat::MCPConnectionStatus::Error(e.to_string()));
+                // Continue without MCP client - will fall back to HTTP
+            }
+        }
+    }
 
     if let Some(scene) = scene {
         state.set_scene(scene);
