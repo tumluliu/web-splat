@@ -57,7 +57,7 @@ pub enum MCPConnectionStatus {
     Error(String),
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
 pub struct ChatState {
     pub messages: VecDeque<ChatMessage>,
     pub current_input: String,
@@ -70,9 +70,9 @@ pub struct ChatState {
     pub last_connection_attempt: Option<SystemTime>,
     pub use_mcp_client: bool, // Whether to use MCP client or fallback to HTTP
     #[cfg(not(target_arch = "wasm32"))]
-    pub mcp_client: Option<crate::mcp_client::MCPClient>, // Persistent MCP client for continuous conversation
+    pub mcp_client: Option<crate::mcp::mcp_client::MCPClient>, // Persistent MCP client for continuous conversation
     #[cfg(target_arch = "wasm32")]
-    pub mcp_client: Option<crate::mcp_client::MCPClient>, // Persistent MCP client for WASM
+    pub mcp_client: Option<crate::mcp::mcp_client::MCPClient>, // Persistent MCP client for WASM
     #[cfg(target_arch = "wasm32")]
     pub pending_request_id: Option<String>,
 }
@@ -204,7 +204,7 @@ impl ChatState {
         // Create and start new MCP client
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let mut mcp_client = crate::mcp_client::MCPClient::new(server_url.to_string());
+            let mut mcp_client = crate::mcp::mcp_client::MCPClient::new(server_url.to_string());
             
             match mcp_client.start().await {
                 Ok(()) => {
@@ -217,14 +217,14 @@ impl ChatState {
                     let error_msg = format!("Failed to start MCP client: {}", e);
                     self.set_connection_status(MCPConnectionStatus::Error(error_msg.clone()));
                     log::error!("❌ MCP connection failed: {}", error_msg);
-                    Err(e)
+                    Err(error_msg.into())
                 }
             }
         }
         
         #[cfg(target_arch = "wasm32")]
         {
-            let mut mcp_client = crate::mcp_client::MCPClient::new(server_url.to_string());
+            let mut mcp_client = crate::mcp::mcp_client::MCPClient::new(server_url.to_string());
             
             match mcp_client.start().await {
                 Ok(()) => {
@@ -708,7 +708,7 @@ pub async fn test_server_connection(server_url: &str) -> Result<(), Box<dyn std:
         log::info!("🔍 Testing MCP connection to: {}", server_url);
         
         // Test connection by trying to create and start an MCP client
-        let mut test_client = crate::mcp_client::MCPClient::new(server_url.to_string());
+        let mut test_client = crate::mcp::mcp_client::MCPClient::new(server_url.to_string());
         match test_client.start().await {
             Ok(()) => {
                 log::info!("✅ MCP connection test successful");

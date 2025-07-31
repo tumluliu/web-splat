@@ -171,8 +171,8 @@ pub use pointcloud::PointCloud;
 pub mod chat;
 pub use chat::{ChatState, McpResponse, SceneObject, ScenePath, MCPConnectionStatus};
 
-pub mod mcp_client;
-pub use mcp_client::MCPClient;
+pub mod mcp;
+pub use mcp::mcp_client::MCPClient;
 
 pub mod io;
 
@@ -299,7 +299,7 @@ pub struct WindowContext {
     
     // Persistent MCP client for the entire application lifetime
     #[cfg(not(target_arch = "wasm32"))]
-    mcp_client: Option<crate::mcp_client::MCPClient>,
+    mcp_client: Option<crate::mcp::mcp_client::MCPClient>,
     
     // Ground up direction for object positioning only (camera rotations always use Y-up)
     ground_up_direction: Vector3<f32>,
@@ -1522,7 +1522,7 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
         let rt = tokio::runtime::Runtime::new().unwrap();
         
         // Create and start the MCP client in the runtime
-        let mut mcp_client = crate::mcp_client::MCPClient::new(server_url);
+        let mut mcp_client = crate::mcp::mcp_client::MCPClient::new(server_url.clone());
         match rt.block_on(mcp_client.start()) {
             Ok(()) => {
                 log::info!("✅ Persistent MCP client initialized successfully");

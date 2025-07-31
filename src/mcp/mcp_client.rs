@@ -1,7 +1,14 @@
 use serde::{Deserialize, Serialize};
-
+use crate::mcp::handler::MyClientHandler;
 use crate::chat::McpResponse;
-use reqwest::Client;
+use rust_mcp_sdk::error::SdkResult;
+use rust_mcp_sdk::mcp_client::{client_runtime, ClientRuntime};
+use rust_mcp_sdk::schema::{
+    CallToolRequestParams, CallToolResult, ClientCapabilities, ContentBlock, Implementation, InitializeRequestParams, LoggingLevel, 
+    LATEST_PROTOCOL_VERSION,
+};
+use rust_mcp_sdk::{ClientSseTransport, ClientSseTransportOptions, McpClient};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MCPRequest {
@@ -16,23 +23,19 @@ pub struct MCPToolCallRequest {
     pub current_location: [f32; 3],
 }
 
-// Native implementation using rmcp SSE client - following official patterns
+// Native implementation using rust-mcp-sdk SSE client
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use serde_json::json;
-    use rmcp::transport::sse_client::SseClientTransport;
-    use rmcp::service::{ServiceExt, RoleClient, RunningService};
-    use rmcp::model::{ClientInfo, ClientCapabilities, Implementation, CallToolRequestParam};
 
-    
-    /// MCP Client using rmcp SSE transport - following official example patterns
-    #[derive(Debug)]
+    /// MCP Client using rust-mcp-sdk SSE transport
+    // #[derive(Debug)]
     pub struct MCPClient {
         server_url: String,
-        client: Arc<Mutex<Option<RunningService<RoleClient, ClientInfo>>>>,
+        client: Option<Arc<ClientRuntime>>,
     }
 
     impl MCPClient {
@@ -40,14 +43,13 @@ mod native {
         pub fn new(server_url: String) -> Self {
             Self {
                 server_url,
-                client: Arc::new(Mutex::new(None)),
+                client: None,
             }
         }
 
-        /// Start the MCP client connection using rmcp SSE transport
-        /// Following the exact pattern from the official SSE client example
-        pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            log::info!("🔌 Starting rmcp SSE client connection to: {}", self.server_url);
+        /// Start the MCP client connection using rust-mcp-sdk SSE transport
+        pub async fn start(&mut self) -> SdkResult<()> {
+            log::info!("🔌 Starting rust-mcp-sdk SSE client connection to: {}", self.server_url);
             
             // Create SSE URL - ensure it ends with /sse
             let sse_url = if self.server_url.ends_with("/sse") {
@@ -57,64 +59,51 @@ mod native {
             };
             
             log::info!("🔗 Connecting to SSE endpoint: {}", sse_url);
-            
-            // Step 1: Create transport - following official example
-            let transport = SseClientTransport::start(sse_url.as_str()).await?;
-            
-            // Step 2: Create client info - following official example
-            let client_info = ClientInfo {
-                protocol_version: Default::default(),
+
+            // Step1 : Define client details and capabilities
+            let client_details: InitializeRequestParams = InitializeRequestParams {
                 capabilities: ClientCapabilities::default(),
                 client_info: Implementation {
-                    name: "web-splat-mcp-client".to_string(),
-                    version: "1.0.0".to_string(),
+                    name: "riemind-mcp-client".to_string(),
+                    version: "0.1.0".to_string(),
+                    title: Some("Simple Rust MCP Client (SSE)".to_string()),
                 },
+                protocol_version: LATEST_PROTOCOL_VERSION.into(),
             };
             
-            // Step 3: Serve the transport to get client - following official example
-            let client = client_info.serve(transport).await.map_err(|e| {
-                log::error!("client error: {:?}", e);
-                e
-            })?;
+            // Create transport
+            let transport = ClientSseTransport::new(&sse_url, ClientSseTransportOptions::default())?;
+
+            // STEP 3: instantiate our custom handler that is responsible for handling MCP messages
+            let handler = MyClientHandler {};
+
+            let client = client_runtime::create_client(client_details, transport, handler);
+
+            // STEP 5: start the MCP client
+            client.clone().start().await?;
             
-            // Step 4: Initialize and get server info - following official example
-            let server_info = client.peer_info();
-            log::info!("✅ Connected to MCP server: {:#?}", server_info);
-            
+            log::info!("✅ Client initialized successfully");
+            self.client = Some(Arc::clone(&client));
             // Store the client for later use
-            {
-                let mut client_guard = self.client.lock().await;
-                *client_guard = Some(client);
-            }
+
             
-            log::info!("✅ rmcp SSE client connected successfully");
-            log::info!("🔗 Client stored in MCPClient struct");
+            log::info!("✅ rust-mcp-sdk SSE client connected successfully");
             Ok(())
         }
 
-        /// Call a tool on the MCP server using rmcp's call_tool
-        /// Following the official example pattern
+        /// Call a tool on the MCP server using rust-mcp-sdk
         pub async fn call_tool(
             &self,
             tool_name: &str,
             arguments: serde_json::Map<String, serde_json::Value>,
             current_location: [f32; 3],
-        ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
+        ) -> SdkResult<McpResponse> {
             log::info!("🔧 Calling MCP tool: {} with arguments: {:?}", tool_name, arguments);
             log::info!("📍 Current location: {:?}", current_location);
 
-            // Get the stored client
-            let client_guard = self.client.lock().await;
-            log::info!("🔍 Debug - Attempting to get stored client...");
-            
-            let client = client_guard.as_ref()
-                .ok_or("MCP client not connected. Call start() first.")?;
-            
-            log::info!("🔍 Debug - Successfully retrieved stored client");
-
-            // Debug: Print peer info before tool call
-            let peer_info = client.peer_info();
-            log::info!("🔗 Debug - Peer info before tool call: {:#?}", peer_info);
+            // Debug: Print server info before tool call
+            let server_info = self.client.as_ref().unwrap().server_info();
+            log::info!("🔗 Debug - Server info before tool call: {:#?}", server_info);
 
             // Prepare arguments for "Our Awesome Tool" with the exact format required:
             // {"query": "{\"messages\": \"...\", \"current_location\": [x,y,z]}"}
@@ -125,41 +114,32 @@ mod native {
 
             let tool_arguments = json!({
                 "query": query_object.to_string()
-            });
+            }).as_object().unwrap().clone();
 
-            log::info!("📝 Formatted tool arguments for '{}': {}", tool_name, tool_arguments);
-
-            // Convert to the format expected by CallToolRequestParam
-            let arguments_map = tool_arguments.as_object().cloned();
-
-            // Call the tool using rmcp client - following official example
-            log::info!("🔧 Debug - About to call tool: {}", tool_name);
-            log::info!("🔧 Debug - Tool arguments: {:?}", arguments_map);
-            
+            log::info!("📝 Formatted tool arguments for '{}': {:?}", tool_name, tool_arguments);
             log::info!("🔧 Debug - Tool name: '{}'", tool_name);
-            let tool_result = match client.call_tool(CallToolRequestParam {
-                name: tool_name.to_string().into(),
-                arguments: arguments_map,
-            }).await {
-                Ok(result) => {
-                    log::info!("✅ Tool call successful, parsing result");
-                    result
-                }
-                Err(e) => {
-                    log::error!("❌ Tool call failed with error: {:?}", e);
-                    return Err(Box::new(e));
-                }
+
+            // Create the tool call request
+            let request = CallToolRequestParams {
+                name: tool_name.to_string(),
+                arguments: Some(tool_arguments),
             };
 
+            // Call the tool
+            log::info!("🔧 Debug - About to call tool: {}", tool_name);
+            let result = self.client.as_ref().unwrap().call_tool(request).await?;
+
+            log::info!("✅ Tool call successful, parsing result");
+
             // Parse the result into our McpResponse format
-            self.parse_tool_result(tool_result)
+            self.parse_tool_result(result)
         }
 
-        /// Parse rmcp tool result into our McpResponse format
+        /// Parse rust-mcp-sdk tool result into our McpResponse format
         fn parse_tool_result(
             &self,
-            result: rmcp::model::CallToolResult,
-        ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
+            result: CallToolResult,
+        ) -> SdkResult<McpResponse> {
             log::info!("📋 Parsing tool result into McpResponse");
 
             // Check if we have content
@@ -177,8 +157,8 @@ mod native {
             let first_content = &result.content[0];
 
             // Parse based on content type
-            match &first_content.raw {
-                rmcp::model::RawContent::Text(text_content) => {
+            match first_content.as_text_content()? {
+                text_content => {
                     let text_str = &text_content.text;
                     log::info!("📄 Parsing text content: {}", text_str);
 
@@ -209,18 +189,12 @@ mod native {
             }
         }
 
-        /// Disconnect from the MCP server - following official example
-        pub async fn disconnect(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        /// Disconnect from the MCP server
+        pub async fn disconnect(&self) -> SdkResult<()> {
             log::info!("🔌 Disconnecting from MCP server");
 
-            let mut client_guard = self.client.lock().await;
-            if let Some(client) = client_guard.take() {
-                // Call cancel() as shown in official example
-                let _ = client.cancel().await;
-                log::info!("✅ MCP client disconnected");
-            } else {
-                log::warn!("⚠️ No active MCP client to disconnect");
-            }
+            self.client.as_ref().unwrap().shut_down().await?;
+            log::info!("✅ MCP client disconnected");
 
             Ok(())
         }
@@ -233,18 +207,17 @@ mod wasm {
     use super::*;
 
     pub struct MCPClient {
-        server_url: String,
     }
 
     impl MCPClient {
-        pub fn new(server_url: String) -> Self {
-            Self { server_url }
+        pub fn new() -> Self {
+            Self { server_url: "http://localhost:8080".to_string() }
         }
 
-        pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            log::warn!("🌐 WASM rmcp MCP client not yet implemented");
-            log::info!("📄 WASM builds will use rmcp when SSE client API is stable");
-            Err("WASM rmcp MCP client not yet implemented".into())
+        pub async fn start(&mut self, server_url: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            log::warn!("🌐 WASM rust-mcp-sdk MCP client not yet implemented");
+            log::info!("📄 WASM builds will use rust-mcp-sdk when SSE client API is stable");
+            Err("WASM rust-mcp-sdk MCP client not yet implemented".into())
         }
 
         pub async fn call_tool(
@@ -253,11 +226,9 @@ mod wasm {
             _arguments: serde_json::Map<String, serde_json::Value>,
             _current_location: [f32; 3],
         ) -> Result<McpResponse, Box<dyn std::error::Error + Send + Sync>> {
-            log::warn!("🌐 WASM rmcp MCP tool calling not yet implemented");
-            Err("WASM rmcp MCP tool calling not yet implemented".into())
+            log::warn!("🌐 WASM rust-mcp-sdk MCP tool calling not yet implemented");
+            Err("WASM rust-mcp-sdk MCP tool calling not yet implemented".into())
         }
-
-
     }
 }
 
@@ -275,7 +246,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn test_native_mcp_client_creation() {
-        let mut client = MCPClient::new("http://localhost:3000/sse".to_string());
+        let mut client = MCPClient::new("http://localhost:8080".to_string());
         let result = client.start().await;
         assert!(result.is_ok());
         println!("✅ Native MCP client created successfully");
@@ -284,7 +255,7 @@ mod tests {
     #[cfg(target_arch = "wasm32")]
     #[wasm_bindgen_test::wasm_bindgen_test]
     async fn test_wasm_mcp_client_creation() {
-        let mut client = MCPClient::new("http://localhost:3000/sse".to_string());
+        let mut client = MCPClient::new("http://localhost:8080".to_string());
         let result = client.start().await;
         assert!(result.is_err()); // Expected to fail in WASM
         web_sys::console::log_1(&"✅ WASM MCP client test completed".into());
@@ -306,7 +277,7 @@ mod tests {
     #[tokio::test]
     async fn test_call_tool_format() {
         // Create a client (note: this test may fail if no server is running, but that's OK)
-        let mut client = MCPClient::new("http://localhost:3000/sse".to_string());
+        let mut client = MCPClient::new("http://localhost:8080".to_string());
         
         // We'll test starting the client, but it's OK if it fails (no server)
         let _ = client.start().await; // Ignore result for testing purposes
