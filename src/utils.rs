@@ -121,17 +121,20 @@ impl GPUStopwatch {
                 for (label, index) in labels {
                     let start_timestamp = timestamps[(index * 2) as usize];
                     let end_timestamp = timestamps[(index * 2 + 1) as usize];
-                    
+
                     // Handle potential timestamp wraparound by using checked subtraction
                     let diff_ticks = if end_timestamp >= start_timestamp {
                         end_timestamp - start_timestamp
                     } else {
                         // Handle wraparound case - assume the difference is still valid
                         // but log a warning for debugging
-                        eprintln!("Warning: Timestamp wraparound detected for label '{}'", label);
+                        eprintln!(
+                            "Warning: Timestamp wraparound detected for label '{}'",
+                            label
+                        );
                         end_timestamp.wrapping_sub(start_timestamp)
                     };
-                    
+
                     let diff_time = Duration::from_nanos((diff_ticks as f32 * period) as u64);
                     durations.insert(label, diff_time);
                 }

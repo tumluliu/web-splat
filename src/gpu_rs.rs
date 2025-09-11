@@ -235,7 +235,7 @@ impl GPURSSorter {
             module: &shader,
             entry_point: Some("zero_histograms"),
             compilation_options: Default::default(),
-            cache:None,
+            cache: None,
         });
         let histogram_p = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("calculate_histogram"),
@@ -243,7 +243,7 @@ impl GPURSSorter {
             module: &shader,
             entry_point: Some("calculate_histogram"),
             compilation_options: Default::default(),
-            cache:None,
+            cache: None,
         });
         let prefix_p = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("prefix_histogram"),
@@ -251,7 +251,7 @@ impl GPURSSorter {
             module: &shader,
             entry_point: Some("prefix_histogram"),
             compilation_options: Default::default(),
-            cache:None,
+            cache: None,
         });
         let scatter_even_p = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("scatter_even"),
@@ -259,7 +259,7 @@ impl GPURSSorter {
             module: &shader,
             entry_point: Some("scatter_even"),
             compilation_options: Default::default(),
-            cache:None,
+            cache: None,
         });
         let scatter_odd_p = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("scatter_odd"),
@@ -267,7 +267,7 @@ impl GPURSSorter {
             module: &shader,
             entry_point: Some("scatter_odd"),
             compilation_options: Default::default(),
-            cache:None,
+            cache: None,
         });
 
         return Self {

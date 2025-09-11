@@ -665,7 +665,8 @@ pub(crate) fn ui(state: &mut WindowContext) -> (bool, Option<String>) {
         });
 
     // Chat UI - handle separately to avoid borrowing conflicts
-    let (chat_message, new_input, clear_highlights, new_server_url, new_font_size) = chat_ui(state, ctx);
+    let (chat_message, new_input, clear_highlights, new_server_url, new_font_size) =
+        chat_ui(state, ctx);
 
     // Update chat input state
     state.chat_state.current_input = new_input;
@@ -821,15 +822,21 @@ pub fn chat_ui(
         .resizable(true)
         .show(ctx, |ui| {
             // Chat messages area
-            ui.add(egui::Label::new(egui::RichText::new("Ask about the 3D scene").heading().size(font_size + 4.0)));
+            ui.add(egui::Label::new(
+                egui::RichText::new("Ask about the 3D scene")
+                    .heading()
+                    .size(font_size + 4.0),
+            ));
             ui.separator();
 
             let num_messages = state.chat_state.messages.len();
             let last_message_count = ui.memory(|mem| {
-                mem.data.get_temp::<usize>(egui::Id::new("last_message_count")).unwrap_or(0)
+                mem.data
+                    .get_temp::<usize>(egui::Id::new("last_message_count"))
+                    .unwrap_or(0)
             });
             let should_scroll = state.chat_state.is_sending || num_messages > last_message_count;
-            
+
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .max_height(300.)
@@ -846,30 +853,36 @@ pub fn chat_ui(
                         // Use a vertical layout for better text wrapping
                         ui.group(|ui| {
                             ui.horizontal(|ui| {
-                                ui.add(egui::Label::new(egui::RichText::new(prefix).color(color).size(font_size)));
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new(prefix).color(color).size(font_size),
+                                ));
                             });
                             // Use text with wrapping for better readability and custom font size
                             ui.add(
-                                egui::Label::new(egui::RichText::new(&message.content).size(font_size))
-                                    .wrap()
+                                egui::Label::new(
+                                    egui::RichText::new(&message.content).size(font_size),
+                                )
+                                .wrap(),
                             );
                         });
                         ui.add_space(5.0); // Add some spacing between messages
                     }
-                    
+
                     // Add an invisible marker at the bottom for auto-scrolling
                     let scroll_to_bottom_id = egui::Id::new("scroll_to_bottom");
-                    let scroll_response = ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover());
-                    
+                    let scroll_response =
+                        ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover());
+
                     // Scroll to the bottom marker if we should auto-scroll
                     if should_scroll && num_messages > 0 {
                         ui.scroll_to_rect(scroll_response.rect, Some(egui::Align::BOTTOM));
                     }
                 });
-                
+
             // Remember the current message count for next frame
             ui.memory_mut(|mem| {
-                mem.data.insert_temp(egui::Id::new("last_message_count"), num_messages);
+                mem.data
+                    .insert_temp(egui::Id::new("last_message_count"), num_messages);
             });
 
             ui.separator();
@@ -901,7 +914,9 @@ pub fn chat_ui(
 
             if state.chat_state.is_sending {
                 ui.spinner();
-                ui.add(egui::Label::new(egui::RichText::new("Thinking...").size(font_size)));
+                ui.add(egui::Label::new(
+                    egui::RichText::new("Thinking...").size(font_size),
+                ));
             }
 
             ui.separator();
@@ -912,23 +927,40 @@ pub fn chat_ui(
                     clear_highlights = true;
                 }
 
-                ui.add(egui::Label::new(egui::RichText::new(format!(
-                    "Objects: {}",
-                    state.chat_state.highlighted_objects.len()
-                )).size(font_size - 1.0)));
+                ui.add(egui::Label::new(
+                    egui::RichText::new(format!(
+                        "Objects: {}",
+                        state.chat_state.highlighted_objects.len()
+                    ))
+                    .size(font_size - 1.0),
+                ));
                 if let Some(_path) = &state.chat_state.highlighted_path {
-                    ui.add(egui::Label::new(egui::RichText::new("Path: Active").size(font_size - 1.0)));
+                    ui.add(egui::Label::new(
+                        egui::RichText::new("Path: Active").size(font_size - 1.0),
+                    ));
                 }
-                
+
                 ui.separator();
-                
+
                 // Font size controls
-                ui.add(egui::Label::new(egui::RichText::new("Font Size:").size(font_size - 1.0)));
-                if ui.button("A-").on_hover_text("Decrease font size").clicked() {
+                ui.add(egui::Label::new(
+                    egui::RichText::new("Font Size:").size(font_size - 1.0),
+                ));
+                if ui
+                    .button("A-")
+                    .on_hover_text("Decrease font size")
+                    .clicked()
+                {
                     font_size = (font_size - 1.0).max(10.0); // Minimum font size of 10
                 }
-                ui.add(egui::Label::new(egui::RichText::new(format!("{:.0}", font_size)).size(font_size - 1.0)));
-                if ui.button("A+").on_hover_text("Increase font size").clicked() {
+                ui.add(egui::Label::new(
+                    egui::RichText::new(format!("{:.0}", font_size)).size(font_size - 1.0),
+                ));
+                if ui
+                    .button("A+")
+                    .on_hover_text("Increase font size")
+                    .clicked()
+                {
                     font_size = (font_size + 1.0).min(24.0); // Maximum font size of 24
                 }
             });
@@ -969,19 +1001,34 @@ pub fn chat_ui(
             });
         });
 
-    (message_to_send, current_input, clear_highlights, server_url, font_size)
+    (
+        message_to_send,
+        current_input,
+        clear_highlights,
+        server_url,
+        font_size,
+    )
 }
 
 /// Create mock response for testing - replace with real async handling
 pub fn create_mock_response(message: &str) -> McpResponse {
     let message_lower = message.to_lowercase();
-    
+
     // Check if this is a counting query
     let counting_keywords = [
-        "how many", "count", "number of", "total", "how much", "quantity", "amount of"
+        "how many",
+        "count",
+        "number of",
+        "total",
+        "how much",
+        "quantity",
+        "amount of",
     ];
-    
-    if counting_keywords.iter().any(|&keyword| message_lower.contains(keyword)) {
+
+    if counting_keywords
+        .iter()
+        .any(|&keyword| message_lower.contains(keyword))
+    {
         // Generate counting response based on the query
         let count_answer = if message_lower.contains("chair") {
             "4"
@@ -996,7 +1043,7 @@ pub fn create_mock_response(message: &str) -> McpResponse {
         } else {
             "6" // Generic fallback count
         };
-        
+
         return McpResponse {
             answer: Vec::new(),
             paths: Vec::new(),
@@ -1004,7 +1051,7 @@ pub fn create_mock_response(message: &str) -> McpResponse {
             text_answer: Some(count_answer.to_string()),
         };
     }
-    
+
     // Simple fallback mock response with coffee machine example for object queries
     use std::collections::HashMap;
 
@@ -1053,18 +1100,19 @@ pub fn format_response(response: &McpResponse, current_location: [f32; 3]) -> St
                 } else {
                     format!("There are {} items", count)
                 },
-                current_location[0], current_location[1], current_location[2]
+                current_location[0],
+                current_location[1],
+                current_location[2]
             );
         } else {
             // Format other text responses elegantly
             return format!(
                 "💬 {}\n📍 Query answered from position: ({:.1}, {:.1}, {:.1})",
-                text_answer,
-                current_location[0], current_location[1], current_location[2]
+                text_answer, current_location[0], current_location[1], current_location[2]
             );
         }
     }
-    
+
     // Handle navigation responses (paths)
     if !response.paths.is_empty() {
         let path_responses: Vec<String> = response
@@ -1094,7 +1142,7 @@ pub fn format_response(response: &McpResponse, current_location: [f32; 3]) -> St
             .collect();
         return path_responses.join("\n\n");
     }
-    
+
     // Handle object query responses
     if response.answer.is_empty() {
         format!(
@@ -1117,21 +1165,30 @@ pub fn format_response(response: &McpResponse, current_location: [f32; 3]) -> St
                     center[0] /= 8.0;
                     center[1] /= 8.0;
                     center[2] /= 8.0;
-                    
-                    format!("{} at ({:.1}, {:.1}, {:.1})", obj.name, center[0], center[1], center[2])
+
+                    format!(
+                        "{} at ({:.1}, {:.1}, {:.1})",
+                        obj.name, center[0], center[1], center[2]
+                    )
                 } else {
                     obj.name.clone()
                 }
             })
             .collect::<Vec<_>>()
             .join("\n  • ");
-            
+
         format!(
             "🎯 Found {} {}:\n  • {}\n📍 Query sent from: ({:.1}, {:.1}, {:.1})",
             response.answer.len(),
-            if response.answer.len() == 1 { "object" } else { "objects" },
+            if response.answer.len() == 1 {
+                "object"
+            } else {
+                "objects"
+            },
             objects_list,
-            current_location[0], current_location[1], current_location[2]
+            current_location[0],
+            current_location[1],
+            current_location[2]
         )
     }
 }

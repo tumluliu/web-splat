@@ -5,14 +5,16 @@ use std::{
 };
 
 use image::Pixel;
-#[cfg(target_arch = "wasm32")]
-use web_time::{Duration, Instant};
 use renderer::Display;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
+#[cfg(target_arch = "wasm32")]
+use web_time::{Duration, Instant};
 use wgpu::{util::DeviceExt, Backends, Extent3d};
 
-use cgmath::{Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, UlpsEq, Vector2, Vector3};
+use cgmath::{
+    Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, UlpsEq, Vector2, Vector3,
+};
 use egui::FullOutput;
 
 use utils::key_to_num;
@@ -37,7 +39,7 @@ fn create_look_at_rotation(
 ) -> Quaternion<f32> {
     // Build orthonormal basis: forward, right, up
     let forward = (target_pos - camera_pos).normalize();
-    
+
     // Check if forward and up directions are parallel (avoid singularity)
     let cross_product = forward.cross(up_direction);
     let right = if cross_product.magnitude() > 0.001 {
@@ -51,27 +53,36 @@ fn create_look_at_rotation(
         };
         fallback
     };
-    
+
     let up = right.cross(forward).normalize();
-    
+
     // Create rotation matrix from orthonormal basis
     // Camera looks down negative Z axis, so negate forward
     let rotation_matrix = cgmath::Matrix3::new(
-        right.x, up.x, -forward.x,
-        right.y, up.y, -forward.y,
-        right.z, up.z, -forward.z,
+        right.x, up.x, -forward.x, right.y, up.y, -forward.y, right.z, up.z, -forward.z,
     );
-    
+
     // Convert matrix to quaternion
     let rotation = Quaternion::from(rotation_matrix);
-    
-    log::info!("Created rotation for camera at ({:.3}, {:.3}, {:.3}) looking at ({:.3}, {:.3}, {:.3})", 
-               camera_pos.x, camera_pos.y, camera_pos.z,
-               target_pos.x, target_pos.y, target_pos.z);
-    log::info!("  Forward: ({:.3}, {:.3}, {:.3})", forward.x, forward.y, forward.z);
+
+    log::info!(
+        "Created rotation for camera at ({:.3}, {:.3}, {:.3}) looking at ({:.3}, {:.3}, {:.3})",
+        camera_pos.x,
+        camera_pos.y,
+        camera_pos.z,
+        target_pos.x,
+        target_pos.y,
+        target_pos.z
+    );
+    log::info!(
+        "  Forward: ({:.3}, {:.3}, {:.3})",
+        forward.x,
+        forward.y,
+        forward.z
+    );
     log::info!("  Right: ({:.3}, {:.3}, {:.3})", right.x, right.y, right.z);
     log::info!("  Up: ({:.3}, {:.3}, {:.3})", up.x, up.y, up.z);
-    
+
     rotation
 }
 
@@ -84,16 +95,16 @@ fn create_default_camera_with_up(
 ) -> PerspectiveCamera {
     let center = aabb.center();
     let radius = aabb.radius();
-    
+
     // Create a camera position that's offset from the center in a direction perpendicular to the ground up
     // Choose a direction that's not parallel to the ground up vector
     let mut offset_direction = Vector3::new(1.0, 0.0, 1.0);
-    
+
     // If the ground up is too similar to our default offset, use a different direction
     if ground_up.dot(offset_direction.normalize()) > 0.9 {
         offset_direction = Vector3::new(0.0, 1.0, 1.0);
     }
-    
+
     // Project the offset direction onto the plane perpendicular to ground up
     let projected_offset = offset_direction - offset_direction.dot(ground_up) * ground_up;
     let camera_direction = if projected_offset.magnitude() > 0.001 {
@@ -107,20 +118,40 @@ fn create_default_camera_with_up(
         };
         perpendicular
     };
-    
+
     // Position camera at a reasonable distance from the center
     let camera_position = center + camera_direction * radius * 0.5;
-    
+
     // Create a look-at rotation using the ground up direction
     let look_direction = (center - camera_position).normalize();
     let rotation = Quaternion::look_at(look_direction, ground_up);
-    
+
     log::info!("Created default camera with scene-aligned up direction:");
-    log::info!("  Center: ({:.3}, {:.3}, {:.3})", center.x, center.y, center.z);
-    log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", camera_position.x, camera_position.y, camera_position.z);
-    log::info!("  Ground up: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
-    log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
-    
+    log::info!(
+        "  Center: ({:.3}, {:.3}, {:.3})",
+        center.x,
+        center.y,
+        center.z
+    );
+    log::info!(
+        "  Camera position: ({:.3}, {:.3}, {:.3})",
+        camera_position.x,
+        camera_position.y,
+        camera_position.z
+    );
+    log::info!(
+        "  Ground up: ({:.3}, {:.3}, {:.3})",
+        ground_up.x,
+        ground_up.y,
+        ground_up.z
+    );
+    log::info!(
+        "  Look direction: ({:.3}, {:.3}, {:.3})",
+        look_direction.x,
+        look_direction.y,
+        look_direction.z
+    );
+
     PerspectiveCamera::new(
         camera_position,
         rotation,
@@ -137,11 +168,15 @@ fn create_default_camera_with_up(
 fn use_raw_scene_camera(scene_camera: SceneCamera) -> PerspectiveCamera {
     // Use the scene camera exactly as it was captured - no transformation
     let perspective_camera: PerspectiveCamera = scene_camera.into();
-    
+
     log::info!("Using raw scene camera orientation as ground truth:");
-    log::info!("  Position: ({:.3}, {:.3}, {:.3})", 
-               perspective_camera.position.x, perspective_camera.position.y, perspective_camera.position.z);
-    
+    log::info!(
+        "  Position: ({:.3}, {:.3}, {:.3})",
+        perspective_camera.position.x,
+        perspective_camera.position.y,
+        perspective_camera.position.z
+    );
+
     // Extract the up direction from the scene camera's rotation matrix for reference
     let rotation_matrix: cgmath::Matrix3<f32> = perspective_camera.rotation.into();
     let scene_up = Vector3::new(
@@ -149,14 +184,21 @@ fn use_raw_scene_camera(scene_camera: SceneCamera) -> PerspectiveCamera {
         rotation_matrix.y.y,
         rotation_matrix.y.z,
     );
-    log::info!("  Scene camera up direction: ({:.3}, {:.3}, {:.3})", scene_up.x, scene_up.y, scene_up.z);
-    
+    log::info!(
+        "  Scene camera up direction: ({:.3}, {:.3}, {:.3})",
+        scene_up.x,
+        scene_up.y,
+        scene_up.z
+    );
+
     perspective_camera
 }
 
 mod animation;
 mod ui;
-pub use animation::{Animation, ClosedLoopSequence, NavigationSequence, Sampler, TrackingShot, Transition};
+pub use animation::{
+    Animation, ClosedLoopSequence, NavigationSequence, Sampler, TrackingShot, Transition,
+};
 mod camera;
 pub use camera::{Camera, PerspectiveCamera, PerspectiveProjection};
 mod controller;
@@ -177,10 +219,10 @@ use crate::utils::GPUStopwatch;
 pub use self::scene::{Scene, SceneCamera, Split};
 
 pub mod gpu_rs;
+mod highlighting;
 mod ui_renderer;
 mod uniform;
 mod utils;
-mod highlighting;
 pub use highlighting::HighlightRenderer;
 
 pub struct RenderConfig {
@@ -241,7 +283,7 @@ impl WGPUContext {
                         ..adapter_limits
                     },
                     label: None,
-                    memory_hints: wgpu::MemoryHints::Performance
+                    memory_hints: wgpu::MemoryHints::Performance,
                 },
                 None,
             )
@@ -288,10 +330,10 @@ pub struct WindowContext {
     stopwatch: Option<GPUStopwatch>,
     chat_state: ChatState,
     pending_chat_responses: Vec<(String, McpResponse)>,
-    
+
     // Ground up direction derived from scene cameras for stable camera positioning
     ground_up_direction: Vector3<f32>,
-    
+
     // Object search animation state
     object_search_active: bool,
     object_search_target: Option<Point3<f32>>,
@@ -366,12 +408,16 @@ impl WindowContext {
 
         let aabb = pc.bbox();
         let aspect = size.width as f32 / size.height as f32;
-        
+
         // Get the scene's ground up direction if available, otherwise use Y-up as fallback
         let ground_up_direction = if let Some(scene) = scene {
             let scene_up = scene.get_first_camera_up();
-            log::info!("Initializing with scene's ground up direction: ({:.3}, {:.3}, {:.3})", 
-                       scene_up.x, scene_up.y, scene_up.z);
+            log::info!(
+                "Initializing with scene's ground up direction: ({:.3}, {:.3}, {:.3})",
+                scene_up.x,
+                scene_up.y,
+                scene_up.z
+            );
             scene_up
         } else {
             log::info!("No scene provided, using default Y-up direction");
@@ -384,7 +430,7 @@ impl WindowContext {
             if let Some(first_camera) = scene.camera(0) {
                 log::info!("Initializing camera using scene's first camera as reference");
                 let scene_camera: PerspectiveCamera = first_camera.into();
-                
+
                 // Use the scene camera's position and rotation as a starting point
                 // but adjust the aspect ratio for the current window size
                 let mut initial_camera = scene_camera;
@@ -403,7 +449,7 @@ impl WindowContext {
         let mut controller = CameraController::new(0.1, 0.05);
         controller.center = pc.center();
         controller.up = Some(ground_up_direction);
-        
+
         let ui_renderer = ui_renderer::EguiWGPU::new(device, surface_format, &window);
 
         let display = Display::new(
@@ -414,7 +460,8 @@ impl WindowContext {
             size.height,
         );
 
-        let mut highlight_renderer = HighlightRenderer::new(device, surface_format.remove_srgb_suffix());
+        let mut highlight_renderer =
+            HighlightRenderer::new(device, surface_format.remove_srgb_suffix());
         highlight_renderer.set_scene_ground_up(ground_up_direction);
 
         let stopwatch = if cfg!(not(target_arch = "wasm32")) {
@@ -470,10 +517,10 @@ impl WindowContext {
                 ..ChatState::default()
             },
             pending_chat_responses: Vec::new(),
-            
+
             // Use the scene's ground up direction from initialization
             ground_up_direction,
-            
+
             // Initialize object search animation state
             object_search_active: false,
             object_search_target: None,
@@ -543,18 +590,22 @@ impl WindowContext {
 
     fn handle_chat_message(&mut self, message: String) {
         log::info!("handle_chat_message called with: {}", message);
-        
+
         // Add user message and set sending state
         self.chat_state.add_message(message.clone(), true);
         self.chat_state.is_sending = true;
-        
+
         log::info!("User message added, making HTTP request to server");
-        
+
         // Make HTTP request to the actual server
         let server_url = self.chat_state.mcp_server_url.clone();
-        
-        log::info!("Sending HTTP request to: {}/query with message: {}", server_url, message);
-        
+
+        log::info!(
+            "Sending HTTP request to: {}/query with message: {}",
+            server_url,
+            message
+        );
+
         // Spawn async task to make HTTP request
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -562,7 +613,11 @@ impl WindowContext {
             let camera_pos = self.splatting_args.camera.position;
             let current_location = [camera_pos.x, camera_pos.y, camera_pos.z];
             let rt = tokio::runtime::Runtime::new().unwrap();
-            match rt.block_on(crate::chat::send_chat_message(msg_clone, &server_url, current_location)) {
+            match rt.block_on(crate::chat::send_chat_message(
+                msg_clone,
+                &server_url,
+                current_location,
+            )) {
                 Ok(response) => {
                     log::info!("Received HTTP response successfully");
                     self.pending_chat_responses.push((message, response));
@@ -574,29 +629,39 @@ impl WindowContext {
                 }
             }
         }
-        
+
         #[cfg(target_arch = "wasm32")]
         {
             log::info!("WASM build: making HTTP request");
-            
+
             // Store a reference to the pending responses that we can update from the async closure
             // We'll use a polling approach - the async task will store the response in a static location
             // and the main update loop will check for it
-            
+
             let msg_clone = message.clone();
             let server_url_clone = server_url.clone();
             let camera_pos = self.splatting_args.camera.position;
             let current_location = [camera_pos.x, camera_pos.y, camera_pos.z];
-            
+
             // Create a unique identifier for this request
-            let request_id = format!("{}_{}", message.len(), chrono::Utc::now().timestamp_millis());
-            
+            let request_id = format!(
+                "{}_{}",
+                message.len(),
+                chrono::Utc::now().timestamp_millis()
+            );
+
             // Store the request ID so we can match it with the response later
             self.chat_state.pending_request_id = Some(request_id.clone());
-            
+
             wasm_bindgen_futures::spawn_local(async move {
                 log::info!("Starting WASM HTTP request...");
-                match crate::chat::send_chat_message(msg_clone.clone(), &server_url_clone, current_location).await {
+                match crate::chat::send_chat_message(
+                    msg_clone.clone(),
+                    &server_url_clone,
+                    current_location,
+                )
+                .await
+                {
                     Ok(response) => {
                         log::info!("WASM HTTP request successful!");
                         // Store the response in a global location that the main thread can access
@@ -611,7 +676,7 @@ impl WindowContext {
                 }
             });
         }
-        
+
         log::info!("Response queued for processing");
     }
 
@@ -627,18 +692,18 @@ impl WindowContext {
                 }
             }
         }
-        
+
         if !self.pending_chat_responses.is_empty() {
             let responses = std::mem::take(&mut self.pending_chat_responses);
             for (_, response) in responses {
                 // Get current camera position for response formatting
                 let camera_pos = self.splatting_args.camera.position;
                 let current_location = [camera_pos.x, camera_pos.y, camera_pos.z];
-                
+
                 let response_text = ui::format_response(&response, current_location);
                 self.chat_state.add_message(response_text, false);
                 self.chat_state.set_highlights(response.clone());
-                
+
                 // Update highlighting renderer and animate camera
                 self.update_highlights_and_animate(response);
             }
@@ -655,43 +720,53 @@ impl WindowContext {
             self.highlight_renderer.clear_highlights();
             return;
         }
-        
+
         // Log current camera position for debugging
         let camera_pos = self.splatting_args.camera.position;
-        log::info!("Camera position: ({:.3}, {:.3}, {:.3})", camera_pos.x, camera_pos.y, camera_pos.z);
-        
+        log::info!(
+            "Camera position: ({:.3}, {:.3}, {:.3})",
+            camera_pos.x,
+            camera_pos.y,
+            camera_pos.z
+        );
+
         // Update scene ground up direction from MCP response if provided
         // The MCP server's scene_normal_vector is the primary source of truth
         let mut ground_up_updated = false;
         if let Some(scene_normal_str) = &response.scene_normal_vector {
             if let Some(scene_normal) = crate::chat::parse_scene_normal_vector(scene_normal_str) {
-                log::info!("🎯 MCP provided scene normal vector: ({:.3}, {:.3}, {:.3})", 
-                           scene_normal.x, scene_normal.y, scene_normal.z);
-                
+                log::info!(
+                    "🎯 MCP provided scene normal vector: ({:.3}, {:.3}, {:.3})",
+                    scene_normal.x,
+                    scene_normal.y,
+                    scene_normal.z
+                );
+
                 // scene_normal_vector always points from ground to ceiling (stable convention)
                 // Check if this is different from our current ground up direction
                 let current_up = self.ground_up_direction;
                 let dot_product = current_up.dot(scene_normal);
-                
+
                 // If the directions are significantly different, update everything
-                if dot_product < 0.98 { // Allow small tolerance for floating point precision
+                if dot_product < 0.98 {
+                    // Allow small tolerance for floating point precision
                     log::info!("⚠️  Scene normal vector changed from ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3})", 
                                current_up.x, current_up.y, current_up.z,
                                scene_normal.x, scene_normal.y, scene_normal.z);
-                    
+
                     // Update the primary ground up direction
                     self.ground_up_direction = scene_normal;
-                    
+
                     // Update all systems that depend on ground up direction
                     self.controller.up = Some(scene_normal);
                     self.highlight_renderer.set_scene_ground_up(scene_normal);
-                    
+
                     // If we have a scene, update its understanding of ground up
                     if let Some(_scene) = &self.scene {
                         log::info!("📸 Scene was using camera-derived up direction, now using MCP-provided direction");
                         // Note: We don't modify the scene itself, but our ground_up_direction now overrides it
                     }
-                    
+
                     ground_up_updated = true;
                     log::info!("✅ Ground up direction updated to auto-detected MCP direction");
                 } else {
@@ -699,49 +774,65 @@ impl WindowContext {
                 }
             }
         }
-        
-        // If no scene_normal_vector was provided and we don't have a scene, 
+
+        // If no scene_normal_vector was provided and we don't have a scene,
         // make sure we're using a reasonable default
         if !ground_up_updated && self.scene.is_none() {
-            log::info!("⚠️  No scene_normal_vector provided and no scene loaded, using default Y-up");
+            log::info!(
+                "⚠️  No scene_normal_vector provided and no scene loaded, using default Y-up"
+            );
             if self.ground_up_direction != Vector3::new(0.0, 1.0, 0.0) {
                 self.ground_up_direction = Vector3::new(0.0, 1.0, 0.0);
                 self.controller.up = Some(self.ground_up_direction);
-                self.highlight_renderer.set_scene_ground_up(self.ground_up_direction);
+                self.highlight_renderer
+                    .set_scene_ground_up(self.ground_up_direction);
             }
         }
-        
+
         // Check if this is a navigation response (has paths)
         if !response.paths.is_empty() {
-            log::info!("🗺️ Navigation response detected - {} paths found", response.paths.len());
-            
+            log::info!(
+                "🗺️ Navigation response detected - {} paths found",
+                response.paths.len()
+            );
+
             let path_response = &response.paths[0]; // Use first path
-            
+
             // Create ScenePath from PathResponse
             let scene_path = crate::chat::ScenePath {
                 waypoints: path_response.path.clone(),
                 description: Some(format!("Path to {}", path_response.object.name)),
             };
-            
+
             // Set highlighting for both path and target object
-            self.highlight_renderer.set_highlighted_objects(vec![path_response.object.clone()], &self.wgpu_context.device);
-            self.highlight_renderer.set_highlighted_path(Some(scene_path.clone()), &self.wgpu_context.device);
-            
+            self.highlight_renderer.set_highlighted_objects(
+                vec![path_response.object.clone()],
+                &self.wgpu_context.device,
+            );
+            self.highlight_renderer
+                .set_highlighted_path(Some(scene_path.clone()), &self.wgpu_context.device);
+
             // Stop any existing object search animation
             if self.object_search_active {
                 self.stop_object_search_animation();
             }
-            
+
             // Start camera animation along the path using target object's coordinate system
-            log::info!("Starting camera animation along path with {} waypoints to '{}'", 
-                       scene_path.waypoints.len(), path_response.object.name);
+            log::info!(
+                "Starting camera animation along path with {} waypoints to '{}'",
+                scene_path.waypoints.len(),
+                path_response.object.name
+            );
             self.animate_camera_along_path_with_object(scene_path, &path_response.object);
         }
         // Check if this is an object response (has objects but no paths)
         else if !response.answer.is_empty() {
             // Log object bounding boxes and sizes for debugging
-            log::info!("📦 Found {} objects, analyzing sizes to select biggest for camera positioning:", response.answer.len());
-            
+            log::info!(
+                "📦 Found {} objects, analyzing sizes to select biggest for camera positioning:",
+                response.answer.len()
+            );
+
             for (i, obj) in response.answer.iter().enumerate() {
                 if obj.aligned_bbox.len() >= 8 {
                     // Calculate center and size from bounding box
@@ -754,9 +845,10 @@ impl WindowContext {
                     center[0] /= 8.0;
                     center[1] /= 8.0;
                     center[2] /= 8.0;
-                    
+
                     // Calculate object volume for size comparison
-                    let bbox_points: Vec<Vector3<f32>> = obj.aligned_bbox
+                    let bbox_points: Vec<Vector3<f32>> = obj
+                        .aligned_bbox
                         .iter()
                         .map(|p| Vector3::new(p[0], p[1], p[2]))
                         .collect();
@@ -764,27 +856,35 @@ impl WindowContext {
                     let height = (bbox_points[7] - bbox_points[3]).magnitude();
                     let depth = (bbox_points[0] - bbox_points[3]).magnitude();
                     let volume = width * height * depth;
-                    
+
                     log::info!("  Object {}: '{}' at center ({:.3}, {:.3}, {:.3}) - Volume: {:.3} (W:{:.2} H:{:.2} D:{:.2})", 
                         i + 1, obj.name, center[0], center[1], center[2], volume, width, height, depth);
                 }
             }
-            
+
             // Update highlighting renderer
-            self.highlight_renderer.set_highlighted_objects(response.answer.clone(), &self.wgpu_context.device);
-            self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
-            
+            self.highlight_renderer
+                .set_highlighted_objects(response.answer.clone(), &self.wgpu_context.device);
+            self.highlight_renderer
+                .set_highlighted_path(None, &self.wgpu_context.device);
+
             // Start closed-loop animation using scene cameras for object searching
-            if let Some((target_center, _optimal_camera_pos, object_size, _ground_normal)) = self.highlight_renderer.get_first_object_viewing_info() {
+            if let Some((target_center, _optimal_camera_pos, object_size, _ground_normal)) =
+                self.highlight_renderer.get_first_object_viewing_info()
+            {
                 // Get the first highlighted object to access its normal vector
                 let first_object = response.answer.first().cloned();
-                self.animate_camera_closed_loop_for_object_search(target_center, object_size, first_object);
+                self.animate_camera_closed_loop_for_object_search(
+                    target_center,
+                    object_size,
+                    first_object,
+                );
             }
         } else {
             // Clear highlights if no objects or paths found
             log::info!("No objects or paths found in response - clearing highlights");
             self.highlight_renderer.clear_highlights();
-            
+
             // Stop any active object search animation
             if self.object_search_active {
                 self.stop_object_search_animation();
@@ -792,130 +892,186 @@ impl WindowContext {
         }
     }
 
-    fn animate_camera_to_ground_aligned_position(&mut self, target_center: Point3<f32>, optimal_camera_pos: Point3<f32>, object_size: f32, _ground_normal: Vector3<f32>) {
+    fn animate_camera_to_ground_aligned_position(
+        &mut self,
+        target_center: Point3<f32>,
+        optimal_camera_pos: Point3<f32>,
+        object_size: f32,
+        _ground_normal: Vector3<f32>,
+    ) {
         use cgmath::{Deg, Rad};
-        
+
         // Get the current camera position for debugging
         let current_pos = self.splatting_args.camera.position;
-        log::info!("Current camera before animation: ({:.3}, {:.3}, {:.3})", current_pos.x, current_pos.y, current_pos.z);
-        
+        log::info!(
+            "Current camera before animation: ({:.3}, {:.3}, {:.3})",
+            current_pos.x,
+            current_pos.y,
+            current_pos.z
+        );
+
         // Calculate look direction from camera position to target center
         let look_direction = (target_center - optimal_camera_pos).normalize();
-        
+
         // Use the scene camera's up direction as ground truth instead of MCP server
         let ground_up = if let Some(scene) = &self.scene {
             scene.get_first_camera_up()
         } else {
             self.ground_up_direction // Fallback to MCP direction if no scene
         };
-        log::info!("Using scene camera up direction as ground truth: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
-        
+        log::info!(
+            "Using scene camera up direction as ground truth: ({:.3}, {:.3}, {:.3})",
+            ground_up.x,
+            ground_up.y,
+            ground_up.z
+        );
+
         // Create camera rotation aligned with the scene's ground plane
         // The camera will look at the object with the scene's ground plane as reference
         // Use the robust rotation function that handles non-standard up directions
         let rotation = create_look_at_rotation(optimal_camera_pos, target_center, ground_up);
-        
+
         // No additional tilt needed - camera is already aligned with ground plane
         let final_rotation = rotation;
-        
+
         // Set appropriate FOV based on object size (slightly wider for better framing)
         let base_fov = Deg(50.0); // Slightly wider than before
         let fov_adjustment = (object_size / 8.0).min(1.8).max(0.6); // More adaptive FOV
         let fovx = Rad::from(base_fov * fov_adjustment);
         let fovy = Rad::from(base_fov * fov_adjustment);
-        
+
         // Create projection with calculated parameters
         let projection = crate::camera::PerspectiveProjection {
             fovx,
             fovy,
-            znear: (object_size * 0.05).max(0.01),  // Closer near plane for better detail
-            zfar: (object_size * 15.0).max(150.0),  // Extended far plane
+            znear: (object_size * 0.05).max(0.01), // Closer near plane for better detail
+            zfar: (object_size * 15.0).max(150.0), // Extended far plane
             fov2view_ratio: fovx.0 / fovy.0,
         };
-        
+
         // Set controller center to the object center for proper orbiting
         self.controller.center = target_center;
-        
+
         // Update controller's up vector to match scene's ground up direction
         self.controller.up = Some(ground_up);
-        
+
         // Create the ground-aligned camera
-        let final_camera = PerspectiveCamera::new(
-            optimal_camera_pos,
-            final_rotation,
-            projection,
-        );
-        
+        let final_camera = PerspectiveCamera::new(optimal_camera_pos, final_rotation, projection);
+
         // Log the calculated positioning for debugging
         log::info!("Scene ground-aligned camera positioning:");
-        log::info!("  Object center: ({:.3}, {:.3}, {:.3})", target_center.x, target_center.y, target_center.z);
-        log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", optimal_camera_pos.x, optimal_camera_pos.y, optimal_camera_pos.z);
-        log::info!("  Look direction: ({:.3}, {:.3}, {:.3})", look_direction.x, look_direction.y, look_direction.z);
-        log::info!("  Scene ground up: ({:.3}, {:.3}, {:.3})", ground_up.x, ground_up.y, ground_up.z);
+        log::info!(
+            "  Object center: ({:.3}, {:.3}, {:.3})",
+            target_center.x,
+            target_center.y,
+            target_center.z
+        );
+        log::info!(
+            "  Camera position: ({:.3}, {:.3}, {:.3})",
+            optimal_camera_pos.x,
+            optimal_camera_pos.y,
+            optimal_camera_pos.z
+        );
+        log::info!(
+            "  Look direction: ({:.3}, {:.3}, {:.3})",
+            look_direction.x,
+            look_direction.y,
+            look_direction.z
+        );
+        log::info!(
+            "  Scene ground up: ({:.3}, {:.3}, {:.3})",
+            ground_up.x,
+            ground_up.y,
+            ground_up.z
+        );
         log::info!("  Object size: {:.3}", object_size);
         log::info!("  FOV: {:.1}°", base_fov.0 * fov_adjustment);
-        
+
         // Cancel any existing animation first
         self.animation.take();
-        
+
         // Animate to the ground-aligned camera position with smooth transition
         self.set_camera(final_camera, Duration::from_millis(1500));
         log::info!("Camera animating to scene ground-aligned position");
     }
 
-    fn animate_camera_closed_loop_for_object_search(&mut self, target_center: Point3<f32>, object_size: f32, target_object: Option<crate::chat::SceneObject>) {
+    fn animate_camera_closed_loop_for_object_search(
+        &mut self,
+        target_center: Point3<f32>,
+        object_size: f32,
+        target_object: Option<crate::chat::SceneObject>,
+    ) {
         log::info!("🎯 Finding optimal camera position for object search");
-        log::info!("  Target object center: ({:.3}, {:.3}, {:.3})", target_center.x, target_center.y, target_center.z);
+        log::info!(
+            "  Target object center: ({:.3}, {:.3}, {:.3})",
+            target_center.x,
+            target_center.y,
+            target_center.z
+        );
         log::info!("  Object size: {:.3}", object_size);
-        
+
         // Log object normal vector if available
         if let Some(ref obj) = target_object {
             if let Some(normal) = &obj.normal_vector {
-                log::info!("  Object normal vector: ({:.3}, {:.3}, {:.3})", normal[0], normal[1], normal[2]);
+                log::info!(
+                    "  Object normal vector: ({:.3}, {:.3}, {:.3})",
+                    normal[0],
+                    normal[1],
+                    normal[2]
+                );
                 log::info!("  Object name: {}", obj.name);
             } else {
                 log::info!("  No normal vector provided for object: {}", obj.name);
             }
         }
-        
+
         // Set object search state
         self.object_search_active = true;
         self.object_search_target = Some(target_center);
         self.object_search_size = object_size;
-        
+
         // Get scene cameras and find the best viewing position for the object
         if let Some(scene) = &self.scene {
             let scene_cameras = scene.cameras(None);
-            
+
             if scene_cameras.is_empty() {
                 log::warn!("No scene cameras available for object search");
                 return;
             }
-            
+
             // Find the best camera position for viewing the object, considering its normal vector
-            let best_camera = self.find_best_camera_for_object(target_center, object_size, &scene_cameras, target_object.as_ref());
-            
+            let best_camera = self.find_best_camera_for_object(
+                target_center,
+                object_size,
+                &scene_cameras,
+                target_object.as_ref(),
+            );
+
             if let Some(optimal_camera) = best_camera {
                 log::info!("📸 Found optimal camera position for object");
-                log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", 
-                          optimal_camera.position.x, optimal_camera.position.y, optimal_camera.position.z);
-                
+                log::info!(
+                    "  Camera position: ({:.3}, {:.3}, {:.3})",
+                    optimal_camera.position.x,
+                    optimal_camera.position.y,
+                    optimal_camera.position.z
+                );
+
                 // Set controller center to the object center for proper reference
                 self.controller.center = target_center;
-                
+
                 // Use the scene's ground up direction for controller
                 let ground_up = scene.get_first_camera_up();
                 self.controller.up = Some(ground_up);
-                
+
                 // Cancel any existing animation first
                 self.animation.take();
-                
+
                 // Animate to the optimal position with a smooth transition
                 self.set_camera(optimal_camera, Duration::from_millis(2000));
-                
+
                 log::info!("✅ Animating to optimal viewing position for object");
                 log::info!("   Camera will stop at the best viewpoint facing the object");
-                
+
                 // Mark that we're no longer actively searching (animation will complete and stop)
                 self.object_search_active = false;
             } else {
@@ -927,16 +1083,22 @@ impl WindowContext {
             self.object_search_active = false;
         }
     }
-    
-    fn find_best_camera_for_object(&self, target_center: Point3<f32>, object_size: f32, scene_cameras: &[SceneCamera], target_object: Option<&crate::chat::SceneObject>) -> Option<PerspectiveCamera> {
+
+    fn find_best_camera_for_object(
+        &self,
+        target_center: Point3<f32>,
+        object_size: f32,
+        scene_cameras: &[SceneCamera],
+        target_object: Option<&crate::chat::SceneObject>,
+    ) -> Option<PerspectiveCamera> {
         use cgmath::{InnerSpace, MetricSpace};
-        
+
         let mut best_camera: Option<PerspectiveCamera> = None;
         let mut best_score = f32::NEG_INFINITY;
-        
+
         // Ideal distance based on object size
         let ideal_distance = (object_size * 2.5).max(5.0).min(20.0);
-        
+
         // Get object normal vector if available
         let object_normal = if let Some(obj) = target_object {
             if let Some(normal) = &obj.normal_vector {
@@ -947,39 +1109,52 @@ impl WindowContext {
         } else {
             None
         };
-        
-        log::info!("🔍 Evaluating {} cameras for optimal object viewing", scene_cameras.len());
+
+        log::info!(
+            "🔍 Evaluating {} cameras for optimal object viewing",
+            scene_cameras.len()
+        );
         log::info!("  Target ideal distance: {:.2}", ideal_distance);
         if let Some(normal) = object_normal {
-            log::info!("  Object normal vector: ({:.3}, {:.3}, {:.3})", normal.x, normal.y, normal.z);
+            log::info!(
+                "  Object normal vector: ({:.3}, {:.3}, {:.3})",
+                normal.x,
+                normal.y,
+                normal.z
+            );
             log::info!("  Will prefer cameras positioned opposite to object's front face");
         } else {
             log::info!("  No object normal vector - using general alignment scoring");
         }
-        
+
         for (i, scene_camera) in scene_cameras.iter().enumerate() {
             let camera: PerspectiveCamera = scene_camera.clone().into();
             let camera_pos = camera.position;
-            
+
             // Calculate distance from camera to object
             let distance = camera_pos.distance(target_center);
-            
+
             // Calculate viewing direction from camera to object
             let to_object = (target_center - camera_pos).normalize();
-            
+
             // Get camera's forward direction
             let camera_rotation: cgmath::Matrix3<f32> = camera.rotation.into();
-            let camera_forward = -Vector3::new(camera_rotation.z.x, camera_rotation.z.y, camera_rotation.z.z);
-            
+            let camera_forward = -Vector3::new(
+                camera_rotation.z.x,
+                camera_rotation.z.y,
+                camera_rotation.z.z,
+            );
+
             // Calculate how well the camera is pointing toward the object
             let alignment = camera_forward.dot(to_object);
-            
+
             // Calculate distance score (prefer cameras near ideal distance)
-            let distance_score = 1.0 - ((distance - ideal_distance).abs() / ideal_distance).min(1.0);
-            
+            let distance_score =
+                1.0 - ((distance - ideal_distance).abs() / ideal_distance).min(1.0);
+
             // Calculate alignment score (prefer cameras pointing toward object)
             let alignment_score = (alignment + 1.0) / 2.0; // Normalize to 0-1
-            
+
             // Calculate normal-based score if object normal is available
             let normal_score = if let Some(obj_normal) = object_normal {
                 // We want the camera to be positioned opposite to the object's front face
@@ -990,49 +1165,75 @@ impl WindowContext {
             } else {
                 0.5 // Neutral score if no normal available
             };
-            
+
             // Combined score - weight normal alignment heavily if available, otherwise use general alignment
             let total_score = if object_normal.is_some() {
                 distance_score * 0.2 + alignment_score * 0.3 + normal_score * 0.5
             } else {
                 distance_score * 0.3 + alignment_score * 0.7
             };
-            
-            if i % 20 == 0 { // Log every 20th camera to avoid spam
+
+            if i % 20 == 0 {
+                // Log every 20th camera to avoid spam
                 if object_normal.is_some() {
-                    log::info!("  Camera {}: dist={:.2}, align={:.3}, normal={:.3}, score={:.3}", 
-                              i, distance, alignment, normal_score, total_score);
+                    log::info!(
+                        "  Camera {}: dist={:.2}, align={:.3}, normal={:.3}, score={:.3}",
+                        i,
+                        distance,
+                        alignment,
+                        normal_score,
+                        total_score
+                    );
                 } else {
-                    log::info!("  Camera {}: dist={:.2}, align={:.3}, score={:.3}", 
-                              i, distance, alignment, total_score);
+                    log::info!(
+                        "  Camera {}: dist={:.2}, align={:.3}, score={:.3}",
+                        i,
+                        distance,
+                        alignment,
+                        total_score
+                    );
                 }
             }
-            
+
             if total_score > best_score {
                 best_score = total_score;
                 best_camera = Some(camera);
             }
         }
-        
+
         if let Some(ref camera) = best_camera {
             log::info!("🏆 Best camera found with score {:.3}", best_score);
-            log::info!("  Position: ({:.3}, {:.3}, {:.3})", 
-                      camera.position.x, camera.position.y, camera.position.z);
-            log::info!("  Distance to object: {:.2}", camera.position.distance(target_center));
-            
+            log::info!(
+                "  Position: ({:.3}, {:.3}, {:.3})",
+                camera.position.x,
+                camera.position.y,
+                camera.position.z
+            );
+            log::info!(
+                "  Distance to object: {:.2}",
+                camera.position.distance(target_center)
+            );
+
             // Verify the camera is facing the object properly
             let camera_rotation: cgmath::Matrix3<f32> = camera.rotation.into();
-            let camera_forward = -Vector3::new(camera_rotation.z.x, camera_rotation.z.y, camera_rotation.z.z);
+            let camera_forward = -Vector3::new(
+                camera_rotation.z.x,
+                camera_rotation.z.y,
+                camera_rotation.z.z,
+            );
             let to_object = (target_center - camera.position).normalize();
             let final_alignment = camera_forward.dot(to_object);
-            log::info!("  Final camera-to-object alignment: {:.3} (1.0 = perfect)", final_alignment);
+            log::info!(
+                "  Final camera-to-object alignment: {:.3} (1.0 = perfect)",
+                final_alignment
+            );
         }
-        
+
         best_camera
     }
-    
+
     // No longer needed since we don't use looping animations
-    
+
     fn stop_object_search_animation(&mut self) {
         self.object_search_active = false;
         self.object_search_target = None;
@@ -1040,34 +1241,51 @@ impl WindowContext {
         log::info!("🛑 Object search animation stopped");
     }
 
-    fn animate_camera_along_path_with_object(&mut self, path: crate::chat::ScenePath, target_object: &crate::chat::SceneObject) {
+    fn animate_camera_along_path_with_object(
+        &mut self,
+        path: crate::chat::ScenePath,
+        target_object: &crate::chat::SceneObject,
+    ) {
         use cgmath::{Deg, Rad};
-        
+
         if path.waypoints.is_empty() {
             log::warn!("Cannot animate along empty path");
             return;
         }
-        
-        log::info!("🎬 Starting elegant path animation with {} waypoints", path.waypoints.len());
-        
+
+        log::info!(
+            "🎬 Starting elegant path animation with {} waypoints",
+            path.waypoints.len()
+        );
+
         // TEMPORARY FIX: Reverse waypoints to test if they're coming in reverse order
         let mut reversed_waypoints = path.waypoints.clone();
         reversed_waypoints.reverse();
         log::info!("🔄 Reversed waypoints for testing:");
         for (i, waypoint) in reversed_waypoints.iter().enumerate() {
-            log::info!("  Reversed waypoint {}: ({:.3}, {:.3}, {:.3})", i, waypoint[0], waypoint[1], waypoint[2]);
+            log::info!(
+                "  Reversed waypoint {}: ({:.3}, {:.3}, {:.3})",
+                i,
+                waypoint[0],
+                waypoint[1],
+                waypoint[2]
+            );
         }
-        
+
         // Use the scene camera's up direction as ground truth instead of MCP server
         let ground_normal = if let Some(scene) = &self.scene {
             scene.get_first_camera_up()
         } else {
             self.ground_up_direction // Fallback to MCP direction if no scene
         };
-        
-        log::info!("Using scene camera up direction as ground truth: ({:.3}, {:.3}, {:.3})", 
-                   ground_normal.x, ground_normal.y, ground_normal.z);
-        
+
+        log::info!(
+            "Using scene camera up direction as ground truth: ({:.3}, {:.3}, {:.3})",
+            ground_normal.x,
+            ground_normal.y,
+            ground_normal.z
+        );
+
         // Calculate object center from aligned_bbox
         let object_center = {
             let mut center = Vector3::new(0.0, 0.0, 0.0);
@@ -1078,16 +1296,18 @@ impl WindowContext {
             }
             center / 8.0
         };
-        
+
         let mut cameras = Vec::new();
-        
+
         // Create cameras for each waypoint (using reversed waypoints to test backward movement)
         for (i, waypoint) in reversed_waypoints.iter().enumerate() {
             let waypoint_pos = Vector3::new(waypoint[0], waypoint[1], waypoint[2]);
-            
+
             let (camera_pos, look_direction, projection) = if i == reversed_waypoints.len() - 1 {
                 // For final waypoint, use optimal object viewing position (same as object search)
-                if let Some((target_center, optimal_camera_pos, object_size, _)) = self.highlight_renderer.get_first_object_viewing_info() {
+                if let Some((target_center, optimal_camera_pos, object_size, _)) =
+                    self.highlight_renderer.get_first_object_viewing_info()
+                {
                     let look_dir = (target_center - optimal_camera_pos).normalize();
                     let projected_look = look_dir - look_dir.dot(ground_normal) * ground_normal;
                     let final_look_direction = if projected_look.magnitude() > 0.001 {
@@ -1095,7 +1315,7 @@ impl WindowContext {
                     } else {
                         look_dir
                     };
-                    
+
                     let obj_projection = crate::camera::PerspectiveProjection {
                         fovx: Rad::from(Deg(50.0)),
                         fovy: Rad::from(Deg(50.0)),
@@ -1103,9 +1323,13 @@ impl WindowContext {
                         zfar: (object_size * 15.0).max(150.0),
                         fov2view_ratio: Deg(50.0).0 / Deg(50.0).0,
                     };
-                    
+
                     log::info!("  Final waypoint: using optimal object viewing position");
-                    (Vector3::from(optimal_camera_pos.to_vec()), final_look_direction, obj_projection)
+                    (
+                        Vector3::from(optimal_camera_pos.to_vec()),
+                        final_look_direction,
+                        obj_projection,
+                    )
                 } else {
                     // Fallback if no optimal position available - use waypoint position directly
                     let camera_pos = waypoint_pos;
@@ -1116,7 +1340,7 @@ impl WindowContext {
                     } else {
                         look_dir
                     };
-                    
+
                     let nav_projection = crate::camera::PerspectiveProjection {
                         fovx: Rad::from(Deg(70.0)),
                         fovy: Rad::from(Deg(50.0)),
@@ -1124,27 +1348,34 @@ impl WindowContext {
                         zfar: 500.0,
                         fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
                     };
-                    
+
                     (camera_pos, final_look_direction, nav_projection)
                 }
             } else {
                 // For regular waypoints, use the exact waypoint position (preserving MCP server height)
                 let camera_pos = waypoint_pos;
-                
+
                 // Look towards next waypoint
                 let next_waypoint = Vector3::new(
                     reversed_waypoints[i + 1][0],
                     reversed_waypoints[i + 1][1],
-                    reversed_waypoints[i + 1][2]
+                    reversed_waypoints[i + 1][2],
                 );
                 let forward_direction = (next_waypoint - waypoint_pos).normalize();
-                
-                log::info!("  Waypoint {} -> {}: forward_direction = ({:.3}, {:.3}, {:.3})", 
-                           i, i + 1, forward_direction.x, forward_direction.y, forward_direction.z);
-                
+
+                log::info!(
+                    "  Waypoint {} -> {}: forward_direction = ({:.3}, {:.3}, {:.3})",
+                    i,
+                    i + 1,
+                    forward_direction.x,
+                    forward_direction.y,
+                    forward_direction.z
+                );
+
                 // Project forward direction onto ground plane to keep camera parallel to ground
                 // This is crucial for preventing tilting - the camera will always look parallel to the ground
-                let projected_forward = forward_direction - forward_direction.dot(ground_normal) * ground_normal;
+                let projected_forward =
+                    forward_direction - forward_direction.dot(ground_normal) * ground_normal;
                 let look_direction = if projected_forward.magnitude() > 0.001 {
                     projected_forward.normalize()
                 } else {
@@ -1154,16 +1385,26 @@ impl WindowContext {
                         // Use scene's first camera's right direction as basis for fallback
                         if let Some(first_camera) = scene.camera(0) {
                             let scene_camera: PerspectiveCamera = first_camera.into();
-                            let rotation_matrix: cgmath::Matrix3<f32> = scene_camera.rotation.into();
-                            let scene_right = Vector3::new(rotation_matrix.x.x, rotation_matrix.x.y, rotation_matrix.x.z);
-                            
+                            let rotation_matrix: cgmath::Matrix3<f32> =
+                                scene_camera.rotation.into();
+                            let scene_right = Vector3::new(
+                                rotation_matrix.x.x,
+                                rotation_matrix.x.y,
+                                rotation_matrix.x.z,
+                            );
+
                             // Project scene's right direction onto plane perpendicular to ground normal
-                            let projected_right = scene_right - scene_right.dot(ground_normal) * ground_normal;
+                            let projected_right =
+                                scene_right - scene_right.dot(ground_normal) * ground_normal;
                             if projected_right.magnitude() > 0.001 {
                                 projected_right.normalize()
                             } else {
                                 // Last resort: use cross product with a different scene vector
-                                let scene_forward = Vector3::new(rotation_matrix.z.x, rotation_matrix.z.y, rotation_matrix.z.z);
+                                let scene_forward = Vector3::new(
+                                    rotation_matrix.z.x,
+                                    rotation_matrix.z.y,
+                                    rotation_matrix.z.z,
+                                );
                                 scene_forward.cross(ground_normal).normalize()
                             }
                         } else {
@@ -1178,12 +1419,20 @@ impl WindowContext {
                     };
                     fallback
                 };
-                
-                log::info!("  Ground normal: ({:.3}, {:.3}, {:.3})", 
-                           ground_normal.x, ground_normal.y, ground_normal.z);
-                log::info!("  Projected look_direction = ({:.3}, {:.3}, {:.3})", 
-                           look_direction.x, look_direction.y, look_direction.z);
-                
+
+                log::info!(
+                    "  Ground normal: ({:.3}, {:.3}, {:.3})",
+                    ground_normal.x,
+                    ground_normal.y,
+                    ground_normal.z
+                );
+                log::info!(
+                    "  Projected look_direction = ({:.3}, {:.3}, {:.3})",
+                    look_direction.x,
+                    look_direction.y,
+                    look_direction.z
+                );
+
                 let nav_projection = crate::camera::PerspectiveProjection {
                     fovx: Rad::from(Deg(70.0)),
                     fovy: Rad::from(Deg(50.0)),
@@ -1191,57 +1440,60 @@ impl WindowContext {
                     zfar: 500.0,
                     fov2view_ratio: Deg(70.0).0 / Deg(50.0).0,
                 };
-                
+
                 (camera_pos, look_direction, nav_projection)
             };
-            
+
             // Create camera rotation using ground plane normal as up vector
             // Use the robust rotation function that handles non-standard up directions
-            let rotation = create_look_at_rotation(Point3::from_vec(camera_pos), Point3::from_vec(camera_pos + look_direction), ground_normal);
-            
-            let camera = PerspectiveCamera::new(
+            let rotation = create_look_at_rotation(
                 Point3::from_vec(camera_pos),
-                rotation,
-                projection,
+                Point3::from_vec(camera_pos + look_direction),
+                ground_normal,
             );
-            
+
+            let camera = PerspectiveCamera::new(Point3::from_vec(camera_pos), rotation, projection);
+
             cameras.push(camera);
-            
+
             log::info!("  Waypoint {}: camera at path position ({:.2}, {:.2}, {:.2}), look dir ({:.2}, {:.2}, {:.2})",
                        i + 1, camera_pos.x, camera_pos.y, camera_pos.z,
                        look_direction.x, look_direction.y, look_direction.z);
         }
-        
+
         // Set controller to use ground plane for consistent controls
         self.controller.up = Some(ground_normal);
-        
+
         // Create simple navigation sequence
         let seconds_per_waypoint = 1.0; // 1 second per waypoint for smooth motion
         let total_duration = Duration::from_secs_f32(cameras.len() as f32 * seconds_per_waypoint);
-        
+
         let navigation = NavigationSequence::new(cameras, seconds_per_waypoint);
         let animation = crate::animation::Animation::new(
             total_duration,
             false, // No looping
             Box::new(navigation),
         );
-        
+
         // Start the animation
         self.animation.take();
         self.animation = Some((animation, true));
-        
-        log::info!("✅ Started elegant path animation: {} waypoints, {:.1}s duration", 
-                   reversed_waypoints.len(), total_duration.as_secs_f32());
-        log::info!("   Camera follows exact path waypoints, maintaining MCP server specified heights");
-    }
-    
 
+        log::info!(
+            "✅ Started elegant path animation: {} waypoints, {:.1}s duration",
+            reversed_waypoints.len(),
+            total_duration.as_secs_f32()
+        );
+        log::info!(
+            "   Camera follows exact path waypoints, maintaining MCP server specified heights"
+        );
+    }
 
     /// returns whether the sceen changed and we need a redraw
-    fn update(&mut self, dt: Duration)  {
+    fn update(&mut self, dt: Duration) {
         // Process any pending chat responses
         self.process_pending_chat_responses();
-        
+
         // ema fps update
 
         if self.splatting_args.walltime < Duration::from_secs(5) {
@@ -1264,7 +1516,7 @@ impl WindowContext {
                 if next_camera.done() {
                     self.animation.take();
                     self.controller.reset_to_camera(self.splatting_args.camera);
-                    
+
                     // Object search animations are single-shot and don't restart
                     if self.object_search_active {
                         log::info!("✅ Object search animation completed - camera positioned at optimal viewpoint");
@@ -1392,7 +1644,8 @@ impl WindowContext {
                 })],
                 ..Default::default()
             });
-            self.highlight_renderer.render(&mut render_pass, self.renderer.camera());
+            self.highlight_renderer
+                .render(&mut render_pass, self.renderer.camera());
         }
 
         self.stopwatch.as_mut().map(|s| s.end(&mut encoder));
@@ -1415,7 +1668,6 @@ impl WindowContext {
             self.ui_renderer.render(&mut render_pass, state);
         }
 
-
         if let Some(ui_state) = ui_state {
             self.ui_renderer.cleanup(ui_state)
         }
@@ -1436,15 +1688,15 @@ impl WindowContext {
         center /= scene.num_cameras() as f32;
 
         self.controller.center = center;
-        
+
         // Only update ground up direction if it hasn't been set by MCP server
         // The precedence is: MCP scene_normal_vector > scene camera up direction > default Y-up
         let current_up = self.ground_up_direction;
         let scene_up = scene.get_first_camera_up();
-        
+
         // Check if current up direction is still the default Y-up, meaning no MCP override
         let is_default_up = current_up == Vector3::new(0.0, 1.0, 0.0);
-        
+
         // If we're using default Y-up or the scene provides a significantly different up direction
         if is_default_up || current_up.dot(scene_up) < 0.98 {
             if !is_default_up {
@@ -1453,24 +1705,37 @@ impl WindowContext {
                            scene_up.x, scene_up.y, scene_up.z);
                 log::info!("Using scene's up direction - MCP scene_normal_vector will override this if provided");
             }
-            
+
             self.ground_up_direction = scene_up;
-            
+
             // Update controller's up vector to use the scene's ground up direction
             self.controller.up = Some(self.ground_up_direction);
-            
+
             // Update highlighting renderer's ground up direction
-            self.highlight_renderer.set_scene_ground_up(self.ground_up_direction);
-            
-            log::info!("✅ Scene ground up direction set to: ({:.3}, {:.3}, {:.3})", 
-                       self.ground_up_direction.x, self.ground_up_direction.y, self.ground_up_direction.z);
+            self.highlight_renderer
+                .set_scene_ground_up(self.ground_up_direction);
+
+            log::info!(
+                "✅ Scene ground up direction set to: ({:.3}, {:.3}, {:.3})",
+                self.ground_up_direction.x,
+                self.ground_up_direction.y,
+                self.ground_up_direction.z
+            );
         } else {
-            log::info!("🎯 Keeping existing ground up direction (likely from MCP): ({:.3}, {:.3}, {:.3})", 
-                       current_up.x, current_up.y, current_up.z);
-            log::info!("   Scene's up direction: ({:.3}, {:.3}, {:.3})", 
-                       scene_up.x, scene_up.y, scene_up.z);
+            log::info!(
+                "🎯 Keeping existing ground up direction (likely from MCP): ({:.3}, {:.3}, {:.3})",
+                current_up.x,
+                current_up.y,
+                current_up.z
+            );
+            log::info!(
+                "   Scene's up direction: ({:.3}, {:.3}, {:.3})",
+                scene_up.x,
+                scene_up.y,
+                scene_up.z
+            );
         }
-        
+
         self.scene.replace(scene);
         if self.saved_cameras.is_empty() {
             self.saved_cameras = self
@@ -1549,12 +1814,16 @@ impl WindowContext {
             if let Some(camera) = scene.camera(i) {
                 // Use the raw scene camera as ground truth - it was captured in the actual environment
                 let scene_camera = use_raw_scene_camera(camera);
-                
+
                 // Use the scene's ground up direction for controller to maintain proper orientation
                 self.controller.up = Some(self.ground_up_direction);
-                log::info!("Controller using scene ground up direction: ({:.3}, {:.3}, {:.3})", 
-                           self.ground_up_direction.x, self.ground_up_direction.y, self.ground_up_direction.z);
-                
+                log::info!(
+                    "Controller using scene ground up direction: ({:.3}, {:.3}, {:.3})",
+                    self.ground_up_direction.x,
+                    self.ground_up_direction.y,
+                    self.ground_up_direction.z
+                );
+
                 self.set_camera(scene_camera, Duration::from_millis(200));
             } else {
                 log::error!("camera {i} not found");
@@ -1646,13 +1915,13 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
     // };
     let window_size = LogicalSize::new(800, 600);
     let window_attributes = Window::default_attributes()
-        .with_inner_size( window_size)
+        .with_inner_size(window_size)
         .with_title(format!(
             "{} ({})",
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION")
         ));
-        
+
     #[allow(deprecated)]
     let window = event_loop.create_window(window_attributes).unwrap();
 
@@ -1690,7 +1959,9 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
         })
         .unwrap_or(Duration::from_millis(17));
 
-    let mut state = WindowContext::new(window, file, &config, scene.as_ref()).await.unwrap();
+    let mut state = WindowContext::new(window, file, &config, scene.as_ref())
+        .await
+        .unwrap();
     state.pointcloud_file_path = pointcloud_file_path;
 
     if let Some(scene) = scene {
@@ -1865,7 +2136,7 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
 #[cfg(target_arch = "wasm32")]
 fn get_web_mcp_server_url() -> String {
     use web_sys::window;
-    
+
     // Try to get URL from localStorage first
     if let Some(window) = window() {
         if let Ok(Some(storage)) = window.local_storage() {
@@ -1876,7 +2147,7 @@ fn get_web_mcp_server_url() -> String {
                 }
             }
         }
-        
+
         // Try to get URL from URL parameters
         if let Some(location) = window.location().href().ok() {
             if let Ok(url) = web_sys::Url::new(&location) {
@@ -1890,7 +2161,7 @@ fn get_web_mcp_server_url() -> String {
             }
         }
     }
-    
+
     // Default fallback
     let default_url = "http://localhost:8080".to_string();
     log::info!("Using default MCP server URL: {}", default_url);
@@ -1913,7 +2184,10 @@ pub async fn run_wasm(
     let scene_reader = scene.map(|d: Vec<u8>| Cursor::new(d));
 
     let mcp_server_url = get_web_mcp_server_url();
-    log::info!("🌐 Web app starting with MCP server URL: {}", mcp_server_url);
+    log::info!(
+        "🌐 Web app starting with MCP server URL: {}",
+        mcp_server_url
+    );
 
     wasm_bindgen_futures::spawn_local(open_window(
         pc_reader,

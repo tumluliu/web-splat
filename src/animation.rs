@@ -393,12 +393,12 @@ impl ClosedLoopSequence {
         C: Into<PerspectiveCamera>,
     {
         let mut cameras: Vec<PerspectiveCamera> = cameras.into_iter().map(|c| c.into()).collect();
-        
+
         // Ensure we have at least one camera
         if cameras.is_empty() {
             panic!("ClosedLoopSequence requires at least one camera");
         }
-        
+
         // Add the first camera at the end to create a smooth loop
         if cameras.len() > 1 {
             cameras.push(cameras[0]);
@@ -410,9 +410,13 @@ impl ClosedLoopSequence {
             looping: true,
         }
     }
-    
+
     /// Create from a subset of scene cameras (e.g., every Nth camera for faster animation)
-    pub fn from_scene_cameras_subset<C>(cameras: Vec<C>, step: usize, seconds_per_camera: f32) -> Self
+    pub fn from_scene_cameras_subset<C>(
+        cameras: Vec<C>,
+        step: usize,
+        seconds_per_camera: f32,
+    ) -> Self
     where
         C: Into<PerspectiveCamera>,
     {
@@ -422,10 +426,10 @@ impl ClosedLoopSequence {
             .enumerate()
             .filter_map(|(i, camera)| if i % step == 0 { Some(camera) } else { None })
             .collect();
-        
+
         Self::from_scene_cameras(subset_cameras, seconds_per_camera)
     }
-    
+
     pub fn num_cameras(&self) -> usize {
         self.cameras.len()
     }

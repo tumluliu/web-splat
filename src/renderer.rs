@@ -666,7 +666,7 @@ impl Display {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug,PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct SplattingArgs {
     pub camera: PerspectiveCamera,
     pub viewport: Vector2<u32>,

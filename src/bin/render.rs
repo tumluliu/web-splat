@@ -215,7 +215,7 @@ pub async fn download_texture(
 
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfoBase{
+        wgpu::TexelCopyBufferInfoBase {
             buffer: &staging_buffer,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
