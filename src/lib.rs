@@ -1248,7 +1248,7 @@ impl WindowContext {
             self.splatting_args.walltime += dt;
         }
         if let Some((next_camera, playing)) = &mut self.animation {
-            if self.controller.user_inptut {
+            if self.controller.user_input {
                 // Stop object search animation when user interacts with camera
                 if self.object_search_active {
                     self.stop_object_search_animation();
