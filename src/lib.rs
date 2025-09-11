@@ -156,7 +156,7 @@ fn use_raw_scene_camera(scene_camera: SceneCamera) -> PerspectiveCamera {
 
 mod animation;
 mod ui;
-pub use animation::{Animation, NavigationSequence, Sampler, TrackingShot, Transition};
+pub use animation::{Animation, ClosedLoopSequence, NavigationSequence, Sampler, TrackingShot, Transition};
 mod camera;
 pub use camera::{Camera, PerspectiveCamera, PerspectiveProjection};
 mod controller;
@@ -291,6 +291,11 @@ pub struct WindowContext {
     
     // Ground up direction derived from scene cameras for stable camera positioning
     ground_up_direction: Vector3<f32>,
+    
+    // Object search animation state
+    object_search_active: bool,
+    object_search_target: Option<Point3<f32>>,
+    object_search_size: f32,
 }
 
 impl WindowContext {
@@ -468,6 +473,11 @@ impl WindowContext {
             
             // Use the scene's ground up direction from initialization
             ground_up_direction,
+            
+            // Initialize object search animation state
+            object_search_active: false,
+            object_search_target: None,
+            object_search_size: 0.0,
         })
     }
 
@@ -717,6 +727,11 @@ impl WindowContext {
             self.highlight_renderer.set_highlighted_objects(vec![path_response.object.clone()], &self.wgpu_context.device);
             self.highlight_renderer.set_highlighted_path(Some(scene_path.clone()), &self.wgpu_context.device);
             
+            // Stop any existing object search animation
+            if self.object_search_active {
+                self.stop_object_search_animation();
+            }
+            
             // Start camera animation along the path using target object's coordinate system
             log::info!("Starting camera animation along path with {} waypoints to '{}'", 
                        scene_path.waypoints.len(), path_response.object.name);
@@ -759,14 +774,21 @@ impl WindowContext {
             self.highlight_renderer.set_highlighted_objects(response.answer.clone(), &self.wgpu_context.device);
             self.highlight_renderer.set_highlighted_path(None, &self.wgpu_context.device);
             
-            // Animate camera to first object with scene ground-aligned positioning
-            if let Some((target_center, optimal_camera_pos, object_size, ground_normal)) = self.highlight_renderer.get_first_object_viewing_info() {
-                self.animate_camera_to_ground_aligned_position(target_center, optimal_camera_pos, object_size, ground_normal);
+            // Start closed-loop animation using scene cameras for object searching
+            if let Some((target_center, _optimal_camera_pos, object_size, _ground_normal)) = self.highlight_renderer.get_first_object_viewing_info() {
+                // Get the first highlighted object to access its normal vector
+                let first_object = response.answer.first().cloned();
+                self.animate_camera_closed_loop_for_object_search(target_center, object_size, first_object);
             }
         } else {
             // Clear highlights if no objects or paths found
             log::info!("No objects or paths found in response - clearing highlights");
             self.highlight_renderer.clear_highlights();
+            
+            // Stop any active object search animation
+            if self.object_search_active {
+                self.stop_object_search_animation();
+            }
         }
     }
 
@@ -839,6 +861,183 @@ impl WindowContext {
         // Animate to the ground-aligned camera position with smooth transition
         self.set_camera(final_camera, Duration::from_millis(1500));
         log::info!("Camera animating to scene ground-aligned position");
+    }
+
+    fn animate_camera_closed_loop_for_object_search(&mut self, target_center: Point3<f32>, object_size: f32, target_object: Option<crate::chat::SceneObject>) {
+        log::info!("🎯 Finding optimal camera position for object search");
+        log::info!("  Target object center: ({:.3}, {:.3}, {:.3})", target_center.x, target_center.y, target_center.z);
+        log::info!("  Object size: {:.3}", object_size);
+        
+        // Log object normal vector if available
+        if let Some(ref obj) = target_object {
+            if let Some(normal) = &obj.normal_vector {
+                log::info!("  Object normal vector: ({:.3}, {:.3}, {:.3})", normal[0], normal[1], normal[2]);
+                log::info!("  Object name: {}", obj.name);
+            } else {
+                log::info!("  No normal vector provided for object: {}", obj.name);
+            }
+        }
+        
+        // Set object search state
+        self.object_search_active = true;
+        self.object_search_target = Some(target_center);
+        self.object_search_size = object_size;
+        
+        // Get scene cameras and find the best viewing position for the object
+        if let Some(scene) = &self.scene {
+            let scene_cameras = scene.cameras(None);
+            
+            if scene_cameras.is_empty() {
+                log::warn!("No scene cameras available for object search");
+                return;
+            }
+            
+            // Find the best camera position for viewing the object, considering its normal vector
+            let best_camera = self.find_best_camera_for_object(target_center, object_size, &scene_cameras, target_object.as_ref());
+            
+            if let Some(optimal_camera) = best_camera {
+                log::info!("📸 Found optimal camera position for object");
+                log::info!("  Camera position: ({:.3}, {:.3}, {:.3})", 
+                          optimal_camera.position.x, optimal_camera.position.y, optimal_camera.position.z);
+                
+                // Set controller center to the object center for proper reference
+                self.controller.center = target_center;
+                
+                // Use the scene's ground up direction for controller
+                let ground_up = scene.get_first_camera_up();
+                self.controller.up = Some(ground_up);
+                
+                // Cancel any existing animation first
+                self.animation.take();
+                
+                // Animate to the optimal position with a smooth transition
+                self.set_camera(optimal_camera, Duration::from_millis(2000));
+                
+                log::info!("✅ Animating to optimal viewing position for object");
+                log::info!("   Camera will stop at the best viewpoint facing the object");
+                
+                // Mark that we're no longer actively searching (animation will complete and stop)
+                self.object_search_active = false;
+            } else {
+                log::warn!("Could not find suitable camera position for object");
+                self.object_search_active = false;
+            }
+        } else {
+            log::warn!("No scene available for object search");
+            self.object_search_active = false;
+        }
+    }
+    
+    fn find_best_camera_for_object(&self, target_center: Point3<f32>, object_size: f32, scene_cameras: &[SceneCamera], target_object: Option<&crate::chat::SceneObject>) -> Option<PerspectiveCamera> {
+        use cgmath::{InnerSpace, MetricSpace};
+        
+        let mut best_camera: Option<PerspectiveCamera> = None;
+        let mut best_score = f32::NEG_INFINITY;
+        
+        // Ideal distance based on object size
+        let ideal_distance = (object_size * 2.5).max(5.0).min(20.0);
+        
+        // Get object normal vector if available
+        let object_normal = if let Some(obj) = target_object {
+            if let Some(normal) = &obj.normal_vector {
+                Some(Vector3::new(normal[0], normal[1], normal[2]).normalize())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+        log::info!("🔍 Evaluating {} cameras for optimal object viewing", scene_cameras.len());
+        log::info!("  Target ideal distance: {:.2}", ideal_distance);
+        if let Some(normal) = object_normal {
+            log::info!("  Object normal vector: ({:.3}, {:.3}, {:.3})", normal.x, normal.y, normal.z);
+            log::info!("  Will prefer cameras positioned opposite to object's front face");
+        } else {
+            log::info!("  No object normal vector - using general alignment scoring");
+        }
+        
+        for (i, scene_camera) in scene_cameras.iter().enumerate() {
+            let camera: PerspectiveCamera = scene_camera.clone().into();
+            let camera_pos = camera.position;
+            
+            // Calculate distance from camera to object
+            let distance = camera_pos.distance(target_center);
+            
+            // Calculate viewing direction from camera to object
+            let to_object = (target_center - camera_pos).normalize();
+            
+            // Get camera's forward direction
+            let camera_rotation: cgmath::Matrix3<f32> = camera.rotation.into();
+            let camera_forward = -Vector3::new(camera_rotation.z.x, camera_rotation.z.y, camera_rotation.z.z);
+            
+            // Calculate how well the camera is pointing toward the object
+            let alignment = camera_forward.dot(to_object);
+            
+            // Calculate distance score (prefer cameras near ideal distance)
+            let distance_score = 1.0 - ((distance - ideal_distance).abs() / ideal_distance).min(1.0);
+            
+            // Calculate alignment score (prefer cameras pointing toward object)
+            let alignment_score = (alignment + 1.0) / 2.0; // Normalize to 0-1
+            
+            // Calculate normal-based score if object normal is available
+            let normal_score = if let Some(obj_normal) = object_normal {
+                // We want the camera to be positioned opposite to the object's front face
+                // So the vector from object to camera should be opposite to the object's normal
+                let object_to_camera = (camera_pos - target_center).normalize();
+                let normal_alignment = -obj_normal.dot(object_to_camera); // Negative because we want opposite direction
+                (normal_alignment + 1.0) / 2.0 // Normalize to 0-1
+            } else {
+                0.5 // Neutral score if no normal available
+            };
+            
+            // Combined score - weight normal alignment heavily if available, otherwise use general alignment
+            let total_score = if object_normal.is_some() {
+                distance_score * 0.2 + alignment_score * 0.3 + normal_score * 0.5
+            } else {
+                distance_score * 0.3 + alignment_score * 0.7
+            };
+            
+            if i % 20 == 0 { // Log every 20th camera to avoid spam
+                if object_normal.is_some() {
+                    log::info!("  Camera {}: dist={:.2}, align={:.3}, normal={:.3}, score={:.3}", 
+                              i, distance, alignment, normal_score, total_score);
+                } else {
+                    log::info!("  Camera {}: dist={:.2}, align={:.3}, score={:.3}", 
+                              i, distance, alignment, total_score);
+                }
+            }
+            
+            if total_score > best_score {
+                best_score = total_score;
+                best_camera = Some(camera);
+            }
+        }
+        
+        if let Some(ref camera) = best_camera {
+            log::info!("🏆 Best camera found with score {:.3}", best_score);
+            log::info!("  Position: ({:.3}, {:.3}, {:.3})", 
+                      camera.position.x, camera.position.y, camera.position.z);
+            log::info!("  Distance to object: {:.2}", camera.position.distance(target_center));
+            
+            // Verify the camera is facing the object properly
+            let camera_rotation: cgmath::Matrix3<f32> = camera.rotation.into();
+            let camera_forward = -Vector3::new(camera_rotation.z.x, camera_rotation.z.y, camera_rotation.z.z);
+            let to_object = (target_center - camera.position).normalize();
+            let final_alignment = camera_forward.dot(to_object);
+            log::info!("  Final camera-to-object alignment: {:.3} (1.0 = perfect)", final_alignment);
+        }
+        
+        best_camera
+    }
+    
+    // No longer needed since we don't use looping animations
+    
+    fn stop_object_search_animation(&mut self) {
+        self.object_search_active = false;
+        self.object_search_target = None;
+        self.object_search_size = 0.0;
+        log::info!("🛑 Object search animation stopped");
     }
 
     fn animate_camera_along_path_with_object(&mut self, path: crate::chat::ScenePath, target_object: &crate::chat::SceneObject) {
@@ -929,9 +1128,6 @@ impl WindowContext {
                     (camera_pos, final_look_direction, nav_projection)
                 }
             } else {
-                // For regular waypoints, use the exact waypoint position (preserving MCP server height)
-                let camera_pos = waypoint_pos;
-                
                 // For regular waypoints, use the exact waypoint position (preserving MCP server height)
                 let camera_pos = waypoint_pos;
                 
@@ -1053,6 +1249,10 @@ impl WindowContext {
         }
         if let Some((next_camera, playing)) = &mut self.animation {
             if self.controller.user_inptut {
+                // Stop object search animation when user interacts with camera
+                if self.object_search_active {
+                    self.stop_object_search_animation();
+                }
                 self.cancle_animation()
             } else {
                 let dt = if *playing { dt } else { Duration::ZERO };
@@ -1064,6 +1264,12 @@ impl WindowContext {
                 if next_camera.done() {
                     self.animation.take();
                     self.controller.reset_to_camera(self.splatting_args.camera);
+                    
+                    // Object search animations are single-shot and don't restart
+                    if self.object_search_active {
+                        log::info!("✅ Object search animation completed - camera positioned at optimal viewpoint");
+                        self.object_search_active = false;
+                    }
                 }
             }
         } else {

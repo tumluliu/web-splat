@@ -377,6 +377,60 @@ pub struct AdaptiveNavigationSequence {
     return_seconds_per_camera: f32,
 }
 
+/// Closed-loop camera animation using scene camera poses
+/// Cycles through scene cameras in sequence, creating a smooth loop
+pub struct ClosedLoopSequence {
+    cameras: Vec<PerspectiveCamera>,
+    seconds_per_camera: f32,
+    looping: bool,
+}
+
+impl ClosedLoopSequence {
+    /// Create a new closed loop sequence from scene cameras
+    /// The sequence will automatically close the loop by connecting the last camera back to the first
+    pub fn from_scene_cameras<C>(cameras: Vec<C>, seconds_per_camera: f32) -> Self
+    where
+        C: Into<PerspectiveCamera>,
+    {
+        let mut cameras: Vec<PerspectiveCamera> = cameras.into_iter().map(|c| c.into()).collect();
+        
+        // Ensure we have at least one camera
+        if cameras.is_empty() {
+            panic!("ClosedLoopSequence requires at least one camera");
+        }
+        
+        // Add the first camera at the end to create a smooth loop
+        if cameras.len() > 1 {
+            cameras.push(cameras[0]);
+        }
+
+        Self {
+            cameras,
+            seconds_per_camera,
+            looping: true,
+        }
+    }
+    
+    /// Create from a subset of scene cameras (e.g., every Nth camera for faster animation)
+    pub fn from_scene_cameras_subset<C>(cameras: Vec<C>, step: usize, seconds_per_camera: f32) -> Self
+    where
+        C: Into<PerspectiveCamera>,
+    {
+        let all_cameras: Vec<PerspectiveCamera> = cameras.into_iter().map(|c| c.into()).collect();
+        let subset_cameras: Vec<PerspectiveCamera> = all_cameras
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, camera)| if i % step == 0 { Some(camera) } else { None })
+            .collect();
+        
+        Self::from_scene_cameras(subset_cameras, seconds_per_camera)
+    }
+    
+    pub fn num_cameras(&self) -> usize {
+        self.cameras.len()
+    }
+}
+
 impl AdaptiveNavigationSequence {
     pub fn new<C>(
         cameras: Vec<C>,
@@ -399,6 +453,40 @@ impl AdaptiveNavigationSequence {
             pause_seconds_per_camera,
             return_seconds_per_camera,
         }
+    }
+}
+
+impl Sampler for ClosedLoopSequence {
+    type Sample = PerspectiveCamera;
+
+    fn sample(&self, v: f32) -> Self::Sample {
+        if self.cameras.is_empty() {
+            panic!("ClosedLoopSequence has no cameras");
+        }
+
+        if self.cameras.len() == 1 {
+            return self.cameras[0];
+        }
+
+        // For looping animation, v wraps around from 0.0 to 1.0 continuously
+        // Map v to camera segments
+        let total_segments = (self.cameras.len() - 1) as f32;
+        let scaled_progress = (v % 1.0) * total_segments;
+
+        // Clamp to valid range
+        let scaled_progress = scaled_progress.max(0.0).min(total_segments);
+
+        // Find which camera segment we're in
+        let segment_index = (scaled_progress.floor() as usize).min(self.cameras.len() - 2);
+        let segment_progress = scaled_progress - segment_index as f32;
+
+        // Interpolate between the two cameras in this segment
+        let from_camera = self.cameras[segment_index];
+        let to_camera = self.cameras[segment_index + 1];
+
+        // Use smooth interpolation within each segment
+        let smooth_progress = smoothstep_local(segment_progress);
+        from_camera.lerp(&to_camera, smooth_progress)
     }
 }
 
