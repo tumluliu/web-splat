@@ -31,61 +31,6 @@ use winit::{
     window::Window,
 };
 
-// Helper function to create proper camera rotation for non-standard up directions
-fn create_look_at_rotation(
-    camera_pos: Point3<f32>,
-    target_pos: Point3<f32>,
-    up_direction: Vector3<f32>,
-) -> Quaternion<f32> {
-    // Build orthonormal basis: forward, right, up
-    let forward = (target_pos - camera_pos).normalize();
-
-    // Check if forward and up directions are parallel (avoid singularity)
-    let cross_product = forward.cross(up_direction);
-    let right = if cross_product.magnitude() > 0.001 {
-        cross_product.normalize()
-    } else {
-        // Use a fallback right direction when forward and up are parallel
-        let fallback = if up_direction.y.abs() < 0.9 {
-            Vector3::new(0.0, 1.0, 0.0).cross(forward).normalize()
-        } else {
-            Vector3::new(1.0, 0.0, 0.0).cross(forward).normalize()
-        };
-        fallback
-    };
-
-    let up = right.cross(forward).normalize();
-
-    // Create rotation matrix from orthonormal basis
-    // Camera looks down negative Z axis, so negate forward
-    let rotation_matrix = cgmath::Matrix3::new(
-        right.x, up.x, -forward.x, right.y, up.y, -forward.y, right.z, up.z, -forward.z,
-    );
-
-    // Convert matrix to quaternion
-    let rotation = Quaternion::from(rotation_matrix);
-
-    log::info!(
-        "Created rotation for camera at ({:.3}, {:.3}, {:.3}) looking at ({:.3}, {:.3}, {:.3})",
-        camera_pos.x,
-        camera_pos.y,
-        camera_pos.z,
-        target_pos.x,
-        target_pos.y,
-        target_pos.z
-    );
-    log::info!(
-        "  Forward: ({:.3}, {:.3}, {:.3})",
-        forward.x,
-        forward.y,
-        forward.z
-    );
-    log::info!("  Right: ({:.3}, {:.3}, {:.3})", right.x, right.y, right.z);
-    log::info!("  Up: ({:.3}, {:.3}, {:.3})", up.x, up.y, up.z);
-
-    rotation
-}
-
 // Helper function to create a default camera position that respects the scene's up direction
 fn create_default_camera_with_up(
     aabb: pointcloud::Aabb<f32>,
@@ -464,6 +409,10 @@ impl WindowContext {
             HighlightRenderer::new(device, surface_format.remove_srgb_suffix());
         highlight_renderer.set_scene_ground_up(ground_up_direction);
 
+        // Initialize ground normal arrow
+        let scene_center = pc.center();
+        highlight_renderer.update_ground_normal_arrow(device, scene_center);
+
         let stopwatch = if cfg!(not(target_arch = "wasm32")) {
             Some(GPUStopwatch::new(device, Some(3)))
         } else {
@@ -750,7 +699,7 @@ impl WindowContext {
                 // If the directions are significantly different, update everything
                 if dot_product < 0.98 {
                     // Allow small tolerance for floating point precision
-                    log::info!("⚠️  Scene normal vector changed from ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3})", 
+                    log::info!("⚠️  Scene normal vector changed from ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3})",
                                current_up.x, current_up.y, current_up.z,
                                scene_normal.x, scene_normal.y, scene_normal.z);
 
@@ -760,6 +709,11 @@ impl WindowContext {
                     // Update all systems that depend on ground up direction
                     self.controller.up = Some(scene_normal);
                     self.highlight_renderer.set_scene_ground_up(scene_normal);
+
+                    // Update ground normal arrow with scene center
+                    let scene_center = self.pc.center();
+                    self.highlight_renderer
+                        .update_ground_normal_arrow(&self.wgpu_context.device, scene_center);
 
                     // If we have a scene, update its understanding of ground up
                     if let Some(_scene) = &self.scene {
@@ -857,7 +811,7 @@ impl WindowContext {
                     let depth = (bbox_points[0] - bbox_points[3]).magnitude();
                     let volume = width * height * depth;
 
-                    log::info!("  Object {}: '{}' at center ({:.3}, {:.3}, {:.3}) - Volume: {:.3} (W:{:.2} H:{:.2} D:{:.2})", 
+                    log::info!("  Object {}: '{}' at center ({:.3}, {:.3}, {:.3}) - Volume: {:.3} (W:{:.2} H:{:.2} D:{:.2})",
                         i + 1, obj.name, center[0], center[1], center[2], volume, width, height, depth);
                 }
             }
@@ -929,7 +883,8 @@ impl WindowContext {
         // Create camera rotation aligned with the scene's ground plane
         // The camera will look at the object with the scene's ground plane as reference
         // Use the robust rotation function that handles non-standard up directions
-        let rotation = create_look_at_rotation(optimal_camera_pos, target_center, ground_up);
+        let rotation =
+            crate::camera::create_look_at_rotation(optimal_camera_pos, target_center, ground_up);
 
         // No additional tilt needed - camera is already aligned with ground plane
         let final_rotation = rotation;
@@ -1066,11 +1021,33 @@ impl WindowContext {
                 // Cancel any existing animation first
                 self.animation.take();
 
-                // Animate to the optimal position with a smooth transition
-                self.set_camera(optimal_camera, Duration::from_millis(2000));
+                // Create elegant object approach animation using scene cameras as waypoints
+                let current_camera = self.splatting_args.camera.clone();
+                let animation_duration = Duration::from_millis(3500); // Longer duration for elegant movement
 
-                log::info!("✅ Animating to optimal viewing position for object");
-                log::info!("   Camera will stop at the best viewpoint facing the object");
+                let elegant_approach = crate::animation::ElegantObjectApproach::new(
+                    current_camera,
+                    target_center,
+                    optimal_camera,
+                    &scene_cameras,
+                    ground_up,
+                    animation_duration,
+                );
+
+                let animation = crate::animation::Animation::new(
+                    animation_duration,
+                    false, // No looping
+                    Box::new(elegant_approach),
+                );
+
+                self.animation = Some((animation, true));
+
+                log::info!("✅ Starting elegant camera approach to object");
+                log::info!("   Using scene cameras as waypoints for smooth, natural movement");
+                log::info!(
+                    "   Duration: {:.1}s with forward-looking pose throughout",
+                    animation_duration.as_secs_f32()
+                );
 
                 // Mark that we're no longer actively searching (animation will complete and stop)
                 self.object_search_active = false;
@@ -1446,7 +1423,7 @@ impl WindowContext {
 
             // Create camera rotation using ground plane normal as up vector
             // Use the robust rotation function that handles non-standard up directions
-            let rotation = create_look_at_rotation(
+            let rotation = crate::camera::create_look_at_rotation(
                 Point3::from_vec(camera_pos),
                 Point3::from_vec(camera_pos + look_direction),
                 ground_normal,
@@ -1700,7 +1677,7 @@ impl WindowContext {
         // If we're using default Y-up or the scene provides a significantly different up direction
         if is_default_up || current_up.dot(scene_up) < 0.98 {
             if !is_default_up {
-                log::info!("Scene up direction differs from current: ({:.3}, {:.3}, {:.3}) vs ({:.3}, {:.3}, {:.3})", 
+                log::info!("Scene up direction differs from current: ({:.3}, {:.3}, {:.3}) vs ({:.3}, {:.3}, {:.3})",
                            current_up.x, current_up.y, current_up.z,
                            scene_up.x, scene_up.y, scene_up.z);
                 log::info!("Using scene's up direction - MCP scene_normal_vector will override this if provided");
@@ -1714,6 +1691,11 @@ impl WindowContext {
             // Update highlighting renderer's ground up direction
             self.highlight_renderer
                 .set_scene_ground_up(self.ground_up_direction);
+
+            // Update ground normal arrow with scene center
+            let scene_center = self.pc.center();
+            self.highlight_renderer
+                .update_ground_normal_arrow(&self.wgpu_context.device, scene_center);
 
             log::info!(
                 "✅ Scene ground up direction set to: ({:.3}, {:.3}, {:.3})",
@@ -1990,8 +1972,8 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
     let mut last = Instant::now();
 
     #[allow(deprecated)]
-    event_loop.run(move |event,target| 
-        
+    event_loop.run(move |event,target|
+
         match event {
             Event::NewEvents(e) =>  match e{
                 winit::event::StartCause::ResumeTimeReached { .. }=>{
@@ -2028,16 +2010,16 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
                         }
                     }else if key == KeyCode::KeyU{
                         state.ui_visible = !state.ui_visible;
-                        
+
                     }else if key == KeyCode::KeyC{
                         state.save_view();
                     } else  if key == KeyCode::KeyR && state.controller.alt_pressed{
                         if let Err(err) = state.reload(){
                             log::error!("failed to reload volume: {:?}", err);
-                        }   
+                        }
                     }else if let Some(scene) = &state.scene{
 
-                        let new_camera = 
+                        let new_camera =
                         if let Some(num) = key_to_num(key){
                             Some(num as usize)
                         }
@@ -2104,7 +2086,7 @@ pub async fn open_window<R: Read + Seek + Send + Sync + 'static>(
                 let resolution_change = state.splatting_args.resolution != Vector2::new(state.config.width, state.config.height);
 
                 let request_redraw = old_settings != state.splatting_args || resolution_change;
-    
+
                 if request_redraw || redraw_ui{
                     state.fps = (1. / dt.as_secs_f32()) * 0.05 + state.fps * 0.95;
                     match state.render(request_redraw,state.ui_visible.then_some(shapes)) {

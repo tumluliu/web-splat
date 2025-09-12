@@ -29,9 +29,14 @@ pub struct HighlightRenderer {
 
     // Feature flags
     show_normal_arrows: bool,
+    show_ground_normal_arrow: bool,
 
     // Scene ground up direction for stable camera positioning
     scene_ground_up: Vector3<f32>,
+
+    // Ground normal arrow buffer (separate from object arrows)
+    ground_normal_arrow_buffer: Option<wgpu::Buffer>,
+    ground_normal_arrow_vertex_count: u32,
 }
 
 #[repr(C)]
@@ -95,7 +100,12 @@ impl HighlightRenderer {
             arrow_vertex_count: 0,
             // Feature flags - set to false to disable normal arrows by default
             show_normal_arrows: false,
+            show_ground_normal_arrow: true, // Now safe with all fixes applied
             scene_ground_up: Vector3::new(0.0, 1.0, 0.0), // Default to Y-up
+
+            // Initialize ground normal arrow buffer
+            ground_normal_arrow_buffer: None,
+            ground_normal_arrow_vertex_count: 0,
         }
     }
 
@@ -497,6 +507,7 @@ impl HighlightRenderer {
     /// Set the scene's ground up direction for stable camera positioning
     pub fn set_scene_ground_up(&mut self, ground_up: Vector3<f32>) {
         self.scene_ground_up = ground_up;
+        // Note: Ground normal arrow will be updated when update_ground_normal_arrow is called with device and scene_center
         log::info!(
             "Set scene ground up direction: ({:.3}, {:.3}, {:.3})",
             ground_up.x,
@@ -959,6 +970,116 @@ impl HighlightRenderer {
         }
     }
 
+    /// Update the ground normal arrow geometry
+    pub fn update_ground_normal_arrow(&mut self, device: &wgpu::Device, scene_center: Point3<f32>) {
+        if !self.show_ground_normal_arrow {
+            self.ground_normal_arrow_buffer = None;
+            self.ground_normal_arrow_vertex_count = 0;
+            return;
+        }
+
+        let mut arrow_vertices: Vec<ArrowVertex> = Vec::new();
+
+        // Create a prominent yellow arrow showing the ground normal
+        let arrow_color = Vector4::new(1.0, 1.0, 0.0, 1.0); // Bright yellow
+        let arrow_length = 5.0; // Reasonable size to prevent issues
+        let arrowhead_size = 1.0; // Reasonable arrowhead size
+
+        // Safety check: ensure ground up direction is valid
+        let ground_up_magnitude = self.scene_ground_up.magnitude();
+        if ground_up_magnitude < 0.001 {
+            log::warn!("Ground up vector too small, skipping ground normal arrow");
+            self.ground_normal_arrow_buffer = None;
+            self.ground_normal_arrow_vertex_count = 0;
+            return;
+        }
+
+        let ground_normal = self.scene_ground_up.normalize();
+        let arrow_start = Vector3::new(scene_center.x, scene_center.y, scene_center.z);
+        let arrow_end = arrow_start + ground_normal * arrow_length;
+
+        log::info!("Creating ground normal arrow:");
+        log::info!(
+            "  Start: ({:.3}, {:.3}, {:.3})",
+            arrow_start.x,
+            arrow_start.y,
+            arrow_start.z
+        );
+        log::info!(
+            "  End: ({:.3}, {:.3}, {:.3})",
+            arrow_end.x,
+            arrow_end.y,
+            arrow_end.z
+        );
+        log::info!(
+            "  Normal: ({:.3}, {:.3}, {:.3})",
+            ground_normal.x,
+            ground_normal.y,
+            ground_normal.z
+        );
+
+        // Main arrow shaft
+        arrow_vertices.push(ArrowVertex {
+            position: arrow_start,
+            color: arrow_color,
+        });
+        arrow_vertices.push(ArrowVertex {
+            position: arrow_end,
+            color: arrow_color,
+        });
+
+        // Create arrowhead - we need two perpendicular vectors to the normal
+        let perp1 = if ground_normal.x.abs() < 0.9 {
+            Vector3::new(1.0, 0.0, 0.0).cross(ground_normal).normalize()
+        } else {
+            Vector3::new(0.0, 1.0, 0.0).cross(ground_normal).normalize()
+        };
+        let perp2 = ground_normal.cross(perp1).normalize();
+
+        // Create simple arrowhead with just 2 lines to keep it safe and simple
+        let arrowhead_point1 =
+            arrow_end - ground_normal * arrowhead_size + perp1 * arrowhead_size * 0.5;
+        let arrowhead_point2 =
+            arrow_end - ground_normal * arrowhead_size + perp2 * arrowhead_size * 0.5;
+
+        arrow_vertices.push(ArrowVertex {
+            position: arrow_end,
+            color: arrow_color,
+        });
+        arrow_vertices.push(ArrowVertex {
+            position: arrowhead_point1,
+            color: arrow_color,
+        });
+
+        arrow_vertices.push(ArrowVertex {
+            position: arrow_end,
+            color: arrow_color,
+        });
+        arrow_vertices.push(ArrowVertex {
+            position: arrowhead_point2,
+            color: arrow_color,
+        });
+
+        // Create buffer
+        if !arrow_vertices.is_empty() {
+            self.ground_normal_arrow_buffer = Some(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Ground Normal Arrow Buffer"),
+                    contents: bytemuck::cast_slice(&arrow_vertices),
+                    usage: BufferUsages::VERTEX,
+                },
+            ));
+            self.ground_normal_arrow_vertex_count = arrow_vertices.len() as u32;
+            log::info!(
+                "Created ground normal arrow with {} vertices",
+                arrow_vertices.len()
+            );
+        } else {
+            self.ground_normal_arrow_buffer = None;
+            self.ground_normal_arrow_vertex_count = 0;
+        }
+    }
+
     pub fn render<'rpass>(
         &'rpass self,
         render_pass: &mut wgpu::RenderPass<'rpass>,
@@ -1001,6 +1122,16 @@ impl HighlightRenderer {
                 render_pass.set_bind_group(0, camera.bind_group(), &[]);
                 render_pass.set_vertex_buffer(0, arrow_buffer.slice(..));
                 render_pass.draw(0..self.arrow_vertex_count, 0..1);
+            }
+        }
+
+        // Render ground normal arrow (always visible yellow arrow showing ground up direction)
+        if let Some(ground_arrow_buffer) = &self.ground_normal_arrow_buffer {
+            if self.ground_normal_arrow_vertex_count > 0 {
+                render_pass.set_pipeline(&self.arrow_pipeline);
+                render_pass.set_bind_group(0, camera.bind_group(), &[]);
+                render_pass.set_vertex_buffer(0, ground_arrow_buffer.slice(..));
+                render_pass.draw(0..self.ground_normal_arrow_vertex_count, 0..1);
             }
         }
     }

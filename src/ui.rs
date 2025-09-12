@@ -1129,7 +1129,7 @@ pub fn format_response(response: &McpResponse, current_location: [f32; 3]) -> St
                 } else {
                     [0.0, 0.0, 0.0]
                 };
-                
+
                 format!(
                     "🗺️ Navigation to {} planned!\n📍 From current position: ({:.1}, {:.1}, {:.1})\n🎯 Path start: ({:.1}, {:.1}, {:.1})\n🏁 Path end: ({:.1}, {:.1}, {:.1})\n📏 Route has {} waypoints",
                     path_response.object.name,

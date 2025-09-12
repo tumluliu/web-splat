@@ -128,10 +128,13 @@ impl GPUStopwatch {
                     } else {
                         // Handle wraparound case - assume the difference is still valid
                         // but log a warning for debugging
-                        eprintln!(
-                            "Warning: Timestamp wraparound detected for label '{}'",
-                            label
-                        );
+                        // Only log occasionally to avoid spam
+                        if label == "rasterization" {
+                            log::debug!(
+                                "GPU timestamp wraparound for '{}' (normal after long uptime)",
+                                label
+                            );
+                        }
                         end_timestamp.wrapping_sub(start_timestamp)
                     };
 

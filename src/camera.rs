@@ -240,3 +240,60 @@ pub fn focal2fov(focal: f32, pixels: f32) -> Rad<f32> {
 pub fn fov2focal(fov: Rad<f32>, pixels: f32) -> f32 {
     pixels / (2. * (fov * 0.5).tan())
 }
+
+/// Helper function to create proper camera rotation for non-standard up directions
+pub fn create_look_at_rotation(
+    camera_pos: Point3<f32>,
+    target_pos: Point3<f32>,
+    up_direction: Vector3<f32>,
+) -> Quaternion<f32> {
+    use cgmath::InnerSpace;
+
+    // Build orthonormal basis: forward, right, up
+    let forward = (target_pos - camera_pos).normalize();
+
+    // Check if forward and up directions are parallel (avoid singularity)
+    let cross_product = forward.cross(up_direction);
+    let right = if cross_product.magnitude() > 0.001 {
+        cross_product.normalize()
+    } else {
+        // Use a fallback right direction when forward and up are parallel
+        let fallback = if up_direction.y.abs() < 0.9 {
+            Vector3::new(0.0, 1.0, 0.0).cross(forward).normalize()
+        } else {
+            Vector3::new(1.0, 0.0, 0.0).cross(forward).normalize()
+        };
+        fallback
+    };
+
+    let up = right.cross(forward).normalize();
+
+    // Create rotation matrix from orthonormal basis
+    // Camera looks down negative Z axis, so negate forward
+    let rotation_matrix = cgmath::Matrix3::new(
+        right.x, up.x, -forward.x, right.y, up.y, -forward.y, right.z, up.z, -forward.z,
+    );
+
+    // Convert matrix to quaternion
+    let rotation = Quaternion::from(rotation_matrix);
+
+    log::info!(
+        "Created rotation for camera at ({:.3}, {:.3}, {:.3}) looking at ({:.3}, {:.3}, {:.3})",
+        camera_pos.x,
+        camera_pos.y,
+        camera_pos.z,
+        target_pos.x,
+        target_pos.y,
+        target_pos.z
+    );
+    log::info!(
+        "  Forward: ({:.3}, {:.3}, {:.3})",
+        forward.x,
+        forward.y,
+        forward.z
+    );
+    log::info!("  Right: ({:.3}, {:.3}, {:.3})", right.x, right.y, right.z);
+    log::info!("  Up: ({:.3}, {:.3}, {:.3})", up.x, up.y, up.z);
+
+    rotation
+}
